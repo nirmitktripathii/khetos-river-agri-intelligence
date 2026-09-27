@@ -1,0 +1,11 @@
+.venv/
+venv/
+.git/
+.claude/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+graphify-out/
+*.log
+.env
+.streamlit/secrets.toml
