@@ -16,8 +16,9 @@ Can we build an accurate ML / deep-learning / transformer model of the Nakatiya'
 
 | Path | What |
 |---|---|
-| `forecast/data.py` | Loads the bundled GEOGLOWS flow and ERA5 rain and evaporation (no network) |
-| `forecast/features.py` | Features at forecast origin *t* from data up to *t* only; target is log(1 + flow) *h* days ahead. A test proves no future leaks in |
+| `forecast/data.py` | Loads the bundled GEOGLOWS flow (this point and the points upstream), ERA5 rain, evaporation and soil moisture (no network) |
+| `pull_soil.py` | Pulls ERA5 soil moisture (three layers, three cells, from 1940; Open-Meteo, CC BY 4.0) into `inputs/era5_soil_daily.csv.gz` |
+| `forecast/features.py` | Feature families (base, wetness, soil, upstream, and a labelled best-case "future rain") at forecast origin *t*; target is log(1 + flow) *h* days ahead. Tests prove the honest families see nothing after *t* |
 | `forecast/splits.py` | Whole-year blocked splits with a gap, and rolling-origin walk-forward splits |
 | `forecast/metrics.py` | NSE (Nash–Sutcliffe efficiency), log-NSE, KGE (Kling–Gupta efficiency), percent bias, pinball loss, band coverage |
 | `forecast/baselines.py` | Persistence, day-of-year climatology, dry-weather recession |
@@ -38,18 +39,27 @@ UV_CACHE_DIR=.uv-cache uv sync --extra nn --extra dev
 UV_CACHE_DIR=.uv-cache uv run python run_compare.py --nn
 ```
 
-## First result (Nakatiya at the Ramganga, modelled flow, test years 2016–2025)
+## Results (Nakatiya at the Ramganga, modelled flow, test years 2016–2025)
 
-This checks the pipeline. It is an *emulation* score, for the reasons above.
+These are *emulation* scores, for the reasons above. NSE (Nash–Sutcliffe efficiency): 1 is perfect, 0 is no better than the average.
 
-| Horizon | Persistence NSE | Climatology NSE | Gradient boosting NSE | Gradient boosting log-NSE | 10–90 % band coverage |
-|---|---|---|---|---|---|
-| 1 day | 0.56 | 0.14 | 0.66 | 0.93 | 0.80 |
-| 3 days | −0.31 | 0.14 | 0.22 | 0.73 | 0.80 |
-| 7 days | −0.46 | 0.14 | 0.16 | 0.68 | 0.76 |
-| 14 days | −0.40 | 0.14 | 0.15 | 0.64 | 0.74 |
+| Horizon | Persistence | Climatology | Gradient boosting, base | + wetness | + soil moisture | + upstream flow | All honest | **Best case: known future rain** |
+|---|---|---|---|---|---|---|---|---|
+| 1 day | 0.56 | 0.14 | 0.66 | 0.65 | 0.66 | 0.65 | 0.66 | **0.85** |
+| 3 days | −0.31 | 0.14 | 0.22 | 0.21 | 0.23 | 0.23 | 0.21 | **0.84** |
+| 7 days | −0.46 | 0.14 | 0.16 | 0.15 | 0.16 | 0.16 | 0.15 | **0.86** |
+| 14 days | −0.40 | 0.14 | 0.15 | 0.14 | 0.15 | 0.15 | 0.14 | **0.86** |
 
-What it says: beyond a day or two the model barely beats the seasonal average in floods, because the rain that makes floods has not fallen yet and future rain is deliberately not a feature. The dry-season (log-NSE) skill is decent. The median forecast carries about −30 % bias in flow terms, which is what a median of a skewed quantity does; a mean-targeted or corrected model would be needed for volumes.
+(Full table with log-NSE, KGE, bias, monsoon and dry-season scores and band coverage: `python run_compare.py`, written to `out/compare_mouth.csv`.)
+
+What it says:
+
+- **Soil moisture, recency-weighted rain and upstream flow add nothing** (every change is within ±0.02, which is noise). The flow of the last few days already carries what they know about how wet the catchment is, and the upstream points are too close to give warning: water reaches the mouth within the same day.
+- **Knowing the rain to come lifts NSE from about 0.15 to 0.85 at 7–14 days.** Almost all the missing skill is future rain. Two cautions: GEOGLOWS is built from this very ERA5 rain, so the ceiling is higher than a real river would allow; and a real rain *forecast* is much less accurate than the rain that fell, so a real forecast will land well below it.
+- Dry-season skill (log-NSE outside June–September) is already 0.89–0.98 without future rain; the gap is in the monsoon.
+- The median forecast still carries about −30 % bias in flow terms beyond 3 days; a mean-targeted model would be needed for volumes.
+
+**So the one lever left in public data is a rain forecast issued at the origin**: Open-Meteo's archive of past weather forecasts (about 2022 onward) lets us test that fairly.
 
 ## Rules for going further
 

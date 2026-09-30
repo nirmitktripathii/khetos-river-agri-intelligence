@@ -1,7 +1,10 @@
 """Score the baselines and the gradient-boosted model on blocked test years, one row per horizon.
 
-    python run_compare.py            # baselines + gradient boosting (scikit-learn only)
+    python run_compare.py            # baselines + gradient boosting with each feature set (scikit-learn only)
     python run_compare.py --nn       # also LSTM and transformer (needs PyTorch)
+
+Feature sets add one family at a time to the base set, then all honest families together. "best case" also gets
+the rain that actually fell after the origin: no real forecast knows it, so that row is a ceiling, not a skill.
 
 THE TARGET IS GEOGLOWS, NOT THE RIVER. Every score below says how well the model reproduces another model's
 flows from their shared ERA5 inputs. It is a test of the pipeline and a bound on what GEOGLOWS-trained models can
@@ -20,29 +23,45 @@ from forecast import baselines, data, features, gbm, metrics, splits  # noqa: E4
 OUT = Path(__file__).resolve().parent / "out"
 VAL_YEARS = range(2011, 2016)
 TEST_YEARS = range(2016, 2026)  # 2026 is unfinished
+HONEST = ("base", "wetness", "soil", "upstream")
+FEATURE_SETS = {
+    "gb base": ("base",),
+    "gb + wetness": ("base", "wetness"),
+    "gb + soil": ("base", "soil"),
+    "gb + upstream": ("base", "upstream"),
+    "gb all": HONEST,
+    "BEST CASE (known future rain)": HONEST + ("future_rain",),
+}
 
 
 def evaluate(segment="mouth", horizons=features.HORIZONS, use_nn=False):
     df = data.load(segment)
     rows = []
     for h in horizons:
-        X, y = features.build(df, h)
+        X, y = features.build(df, h)  # base set fixes the rows every model is scored on
         train, val, test = splits.blocked(X.index, VAL_YEARS, TEST_YEARS, gap_days=90)
         obs = np.expm1(y[test].to_numpy())
+        monsoon = X.index[test].month.isin([6, 7, 8, 9])
         sims = {
             "persistence": baselines.persistence(X[test]),
             "climatology": baselines.climatology(X[train], y[train], X[test]),
             "recession": baselines.recession(X[test], h),
         }
-        models = gbm.fit(X[train], y[train])
-        band = gbm.predict(models, X[test])
-        sims["gradient boosting"] = band[:, 1]
+        bands = {}
+        for name, groups in FEATURE_SETS.items():
+            Xg, _ = features.build(df, h, groups)
+            Xg = Xg.reindex(X.index)
+            band = gbm.predict(gbm.fit(Xg[train], y[train]), Xg[test])
+            sims[name], bands[name] = band[:, 1], band
         if use_nn:
             sims.update(_neural(df, h, X.index, train, val, test))
         for name, sim in sims.items():
-            rows.append({"horizon_days": h, "model": name, **metrics.report(obs, np.expm1(sim))})
-        rows.append({"horizon_days": h, "model": "gradient boosting 10-90% band",
-                     "coverage_10_90": metrics.coverage(y[test], band[:, 0], band[:, 2])})
+            row = {"horizon_days": h, "model": name, **metrics.report(obs, np.expm1(sim)),
+                   "NSE_monsoon": metrics.nse(obs[monsoon], np.expm1(sim)[monsoon]),
+                   "logNSE_dry": metrics.log_nse(obs[~monsoon], np.expm1(sim)[~monsoon])}
+            if name in bands:
+                row["coverage_10_90"] = metrics.coverage(y[test], bands[name][:, 0], bands[name][:, 2])
+            rows.append(row)
     return pd.DataFrame(rows)
 
 

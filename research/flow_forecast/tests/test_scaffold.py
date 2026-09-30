@@ -50,3 +50,25 @@ def test_features_use_only_the_past():
     pd.testing.assert_series_equal(X.loc[t], X2.loc[t])  # features at t cannot see it
     assert y.loc[t] != y2.loc[t]  # the target, 7 days on, does
     assert y.loc[t] == pytest.approx(np.log1p(df["flow"].shift(-7).loc[t]))
+
+
+def test_future_rain_is_the_rain_after_the_origin():
+    df = _frame()
+    X, _ = features.build(df, horizon=7, groups=("base", "future_rain"))
+    t = X.index[500]
+    after = df["rain_mm"].loc[t + pd.Timedelta(days=1): t + pd.Timedelta(days=7)]
+    assert X.loc[t, "FUTURE_rain_sum"] == pytest.approx(after.sum())
+    assert X.loc[t, "FUTURE_rain_last3"] == pytest.approx(after.iloc[-3:].sum())
+
+
+def test_honest_groups_use_only_the_past():
+    df = _frame()
+    df["sm_0_7"] = 0.2 + df["rain_mm"].rolling(5, min_periods=1).mean() / 100
+    df["up_above"] = df["flow"] * 0.4
+    groups = ("base", "wetness", "soil", "upstream")
+    X, _ = features.build(df, horizon=7, groups=groups)
+    t = X.index[700]
+    later = df.copy()
+    later.loc[later.index > t] *= 50
+    X2, _ = features.build(later, horizon=7, groups=groups)
+    pd.testing.assert_series_equal(X.loc[t], X2.loc[t])
