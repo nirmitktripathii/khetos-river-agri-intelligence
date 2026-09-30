@@ -17,6 +17,8 @@ Can we build an accurate ML / deep-learning / transformer model of the Nakatiya'
 | Path | What |
 |---|---|
 | `forecast/data.py` | Loads the bundled GEOGLOWS flow (this point and the points upstream), ERA5 rain, evaporation and soil moisture (no network) |
+| `pull_rain_forecast.py` | Pulls archived ECMWF rain forecasts, leads 1–7 days, from 2024-03-01 (Open-Meteo Previous Runs API, CC BY 4.0) into `inputs/ecmwf_rain_forecast_daily.csv.gz` |
+| `run_rain_forecast.py` | Fair test of a real rain forecast on 2024-03 to 2026-09 (train with the rain that fell, test with the rain that was forecast) |
 | `pull_soil.py` | Pulls ERA5 soil moisture (three layers, three cells, from 1940; Open-Meteo, CC BY 4.0) into `inputs/era5_soil_daily.csv.gz` |
 | `forecast/features.py` | Feature families (base, wetness, soil, upstream, and a labelled best-case "future rain") at forecast origin *t*; target is log(1 + flow) *h* days ahead. Tests prove the honest families see nothing after *t* |
 | `forecast/splits.py` | Whole-year blocked splits with a gap, and rolling-origin walk-forward splits |
@@ -59,7 +61,23 @@ What it says:
 - Dry-season skill (log-NSE outside June–September) is already 0.89–0.98 without future rain; the gap is in the monsoon.
 - The median forecast still carries about −30 % bias in flow terms beyond 3 days; a mean-targeted model would be needed for volumes.
 
-**So the one lever left in public data is a rain forecast issued at the origin**: Open-Meteo's archive of past weather forecasts (about 2022 onward) lets us test that fairly.
+### With a real rain forecast (test 2024-03 to 2026-09)
+
+Open-Meteo keeps the rain each ECMWF (European Centre for Medium-Range Weather Forecasts) forecast predicted, 1 to 7 days ahead, from 2024-03-01. The model is trained on 1942–2023 with the rain that fell, then given the *forecast* rain in the test period, which is exactly what it would have in real use (the "perfect prognosis" method).
+
+| Horizon | No future rain | **ECMWF rain forecast** | Best case: rain that fell |
+|---|---|---|---|
+| 1 day | 0.68 | **0.80** | 0.86 |
+| 3 days | 0.30 | **0.59** | 0.87 |
+| 7 days | 0.21 | **0.25** | 0.87 |
+
+(NSE; monsoon-only NSE rises from 0.16 to 0.51 at 3 days. Full table: `python run_rain_forecast.py`, written to `out/rain_forecast_mouth.csv`.)
+
+- **A real rain forecast is the first thing that helps**: it closes about half the gap at 1–3 days and removes most of the volume bias (−34 % to −2 % at 3 days).
+- **At 7 days it adds little**: the forecast's day-by-day match to the rain that fell drops from 0.78 at 1 day ahead to 0.42 at 7.
+- **The 10–90 % bands become too narrow** (62–72 % of days inside instead of 80 %), because the model was trained on exact rain and does not know the forecast can be wrong. Widening them needs training on forecast rain, which needs a longer forecast archive.
+- ECMWF forecasts 8–26 % more rain than ERA5 over these days; no correction is applied.
+- Only two and a half monsoons are in the test: treat differences of a few hundredths as noise, and rerun as the archive grows.
 
 ## Rules for going further
 

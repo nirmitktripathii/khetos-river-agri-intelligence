@@ -72,3 +72,14 @@ def test_honest_groups_use_only_the_past():
     later.loc[later.index > t] *= 50
     X2, _ = features.build(later, horizon=7, groups=groups)
     pd.testing.assert_series_equal(X.loc[t], X2.loc[t])
+
+
+def test_forecast_rain_uses_lead_k_for_day_t_plus_k():
+    import run_rain_forecast as rrf
+    idx = pd.date_range("2024-03-01", periods=20, freq="D")
+    fc = pd.DataFrame({f"lead{k}_mm": np.arange(20) * 10 + k for k in range(1, 8)}, index=idx, dtype=float)
+    fut = rrf.forecast_future_rain(fc, 3)
+    t = idx[5]
+    # day t+1 from lead 1, t+2 from lead 2, t+3 from lead 3
+    assert fut.loc[t, "FUTURE_rain_sum"] == (60 + 1) + (70 + 2) + (80 + 3)
+    assert fut.loc[t, "FUTURE_rain_last3"] == fut.loc[t, "FUTURE_rain_sum"]
