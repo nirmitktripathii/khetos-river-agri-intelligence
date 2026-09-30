@@ -1,0 +1,18 @@
+"""The River Water Watch page renders from the bundled snapshot, with no network needed."""
+from pathlib import Path
+
+from streamlit.testing.v1 import AppTest
+
+APP = str(Path(__file__).resolve().parent.parent / "app.py")
+
+
+def test_river_water_watch_page_renders():
+    at = AppTest.from_file(APP, default_timeout=120)
+    at.run()
+    at.radio(key="page").set_value("river-flow").run()
+    assert not at.exception
+    assert [h.value for h in at.header] == ["📈 River Water Watch"]
+    assert [t.label for t in at.tabs] == ["Modelled flow", "Satellite width", "Field readings", "Check and limits"]
+    metrics = {m.label: m.value for m in at.metric}
+    assert metrics["Yearly water (1991-2020 mean)"].startswith("113.")
+    assert any("Modelled, not measured" in w.value for w in at.warning)

@@ -1,0 +1,5 @@
+method,what_it_counts,runoff_mm,pct_of_rain,volume_mcm,mean_m3s
+GEOGLOWS v2: ERA5 runoff routed down the river network,"storm runoff and seepage from the soil, from weather alone",305.411,28.9943,113.46,3.59534
+Curve-number method with the thesis's 2009 land cover (CN 78.40),"storm runoff only, no seepage into the river",134.687,12.7865,50.0361,1.58555
+Curve-number method with the thesis's 1979 land cover (CN 75.63),"storm runoff only, no seepage into the river",115.083,10.9255,42.7535,1.35478
+Long-run water balance: rain minus evaporation (Budyko curve),"all water leaving the catchment, in the river or underground",179.782,17.0677,66.7892,2.11642

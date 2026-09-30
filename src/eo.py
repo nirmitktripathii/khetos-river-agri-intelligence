@@ -4,15 +4,22 @@ Every product is read onto one UTM 44N grid (EPSG:32644, the native CRS of Senti
 Landsat over Rohilkhand), so masks, bands and sensors line up pixel-for-pixel. Reads are windowed
 requests against cloud-optimised GeoTIFFs; nothing is downloaded whole.
 """
+import itertools
 import json
 import logging
 import math
+import os
 import queue
+import random
+import re
 import threading
+import time
+from collections import deque
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache, partial
+from urllib.parse import parse_qs, urlsplit
 
 import numpy as np
 import pandas as pd
@@ -20,6 +27,7 @@ import rasterio
 import requests
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
+from rasterio.errors import RasterioIOError
 from rasterio.features import geometry_mask
 from rasterio.transform import Affine, from_origin
 from rasterio.vrt import WarpedVRT
@@ -36,15 +44,27 @@ GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "GDAL_HTTP_MULTIRANGE": "YES",
     "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
-    # Fail fast on stalled transfers (below 1 KB/s for 15 s) and retry, rather than hang for minutes.
+    # Abort stalled transfers (below 1 KB/s for 15 s), but let slow ones finish: GDAL_HTTP_TIMEOUT caps the
+    # whole transfer, and 30 s cut 1 MB tile ranges off at 10-30 KB/s under contention (115 of 176 band reads
+    # failed with three app processes on one link, 2026-09-30). GDAL retries single-range requests only, never
+    # the multi-range reads COG windows use, so _read_on_grid retries whole reads. GDAL_HTTP_RETRY_CODES stays
+    # unset on purpose: setting it replaces GDAL's default list and matches codes as substrings.
     "GDAL_HTTP_CONNECTTIMEOUT": "10",
-    "GDAL_HTTP_TIMEOUT": "30",
+    "GDAL_HTTP_TIMEOUT": "300",
     "GDAL_HTTP_LOW_SPEED_TIME": "15",
     "GDAL_HTTP_LOW_SPEED_LIMIT": "1024",
     "GDAL_HTTP_MAX_RETRY": "3",
-    "GDAL_HTTP_RETRY_DELAY": "1",
+    "GDAL_HTTP_RETRY_DELAY": "2",
     "VSI_CACHE": "TRUE",
 }
+
+# Whole-read retries of remote rasters (see _read_on_grid): up to READ_ATTEMPTS tries, sleeping about 2, 6 and
+# 18 s between them, with at most MAX_REMOTE_READS reads in flight per process. A Planetary Computer href is
+# re-signed when its SAS token expires within SAS_MARGIN_S.
+READ_ATTEMPTS = 4
+READ_BACKOFF_S = 2.0
+MAX_REMOTE_READS = int(os.environ.get("KHETOS_MAX_REMOTE_READS", "8"))
+SAS_MARGIN_S = 300
 
 # Sentinel-2 L2A: from processing baseline 04.00 (25 Jan 2022) every band carries BOA_ADD_OFFSET = -1000.
 # Planetary Computer serves the DNs unharmonised, so reflectance = (DN - 1000) / 10000 for those scenes.
@@ -250,12 +270,234 @@ def _on_io(fn, *args):
     return _IO_POOL.submit(fn, *args).result()
 
 
+# ------------------------------------------------------------------------------ remote read failures
+
+READ_KINDS = {  # classify_read_error kinds -> wording for the UI and reports
+    "expired": "access token expired",
+    "forbidden": "access refused",
+    "throttled": "server busy or throttling",
+    "server": "server error",
+    "truncated": "transfer cut short",
+    "stalled": "transfer stalled",
+    "timeout": "transfer timed out",
+    "network": "network error",
+    "not_found": "file not found",
+    "decode": "corrupt or undecodable data",
+    "io": "read error",
+    "error": "processing error",
+}
+# Tries per kind (READ_ATTEMPTS otherwise). A 409 from Planetary Computer storage is PublicAccessNotPermitted,
+# i.e. a signing problem like 403, not throttling; Azure throttles with 503 ServerBusy.
+_MAX_ATTEMPTS = {"not_found": 1, "error": 1, "decode": 2, "forbidden": 2, "expired": 2}
+_STATUS_KIND = {403: "forbidden", 409: "forbidden", 404: "not_found", 429: "throttled", 503: "throttled",
+                500: "server", 502: "server", 504: "server", 206: "truncated", 0: "network"}
+_STATUS_RANK = (403, 409, 404, 429, 503, 500, 502, 504)
+# GDAL 3.12 vsicurl reports HTTP codes in these forms (0 = transport failure, 206 = short partial body).
+_STATUS_RES = [re.compile(p) for p in (
+    r"HTTP response code: (\d{3})", r"HTTP response code on \S+: (\d{3})",
+    r"HTTP error code(?: for \S+ range \S+)?: (\d{3})", r"response_code=(\d+)", r"(?m)^(\d{3}): ")]
+# curl's own wording, which GDAL passes on in debug output and some errors; checked before a bare 206 or 0.
+_MESSAGE_KINDS = [(k, re.compile(p)) for k, p in (
+    ("stalled", r"Operation too slow"),
+    ("timeout", r"timed out|Timeout was reached"),
+    ("network", r"[Cc]ould not resolve|Couldn't resolve|Connection reset|Connection refused|SSL|Recv failure"
+                r"|Send failure|Failed to connect|connect\(\)"),
+    ("truncated", r"got \d+ bytes, expected \d+|Read error|partial file"),
+    ("decode", r"[Dd]ecod|decompress|ZIPDecode|LZW|corrupt"),
+)]
+
+
+class ReadError(RasterioIOError):
+    """A remote raster read that still failed after retries; `kind` is a READ_KINDS key. The message names
+    the file, never the signed URL."""
+
+    def __init__(self, message, kind="io", status=None, attempts=1, file=""):
+        super().__init__(message)
+        self.kind, self.status, self.attempts, self.file = kind, status, attempts, file
+
+
+def _exc_chain(exc):
+    out, seen = [], set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        out.append(exc)
+        exc = exc.__cause__ or exc.__context__
+    return out
+
+
+def _file_name(href):
+    return str(href).split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1]
+
+
+def _sas_expiry(href):
+    """Expiry (`se`) of a SAS-signed href, or None."""
+    se = parse_qs(urlsplit(str(href)).query).get("se")
+    try:
+        return datetime.fromisoformat(se[0]).astimezone(timezone.utc) if se else None
+    except ValueError:
+        return None
+
+
+def _pick_status(codes):
+    for code in _STATUS_RANK:
+        if code in codes:
+            return code
+    other = sorted(c for c in codes if c >= 400)
+    return other[0] if other else 0 if 0 in codes else 206 if 206 in codes else None
+
+
+def classify_read_error(exc, messages=(), href=None, now=None):
+    """(kind, HTTP status or None) for a failed read, from the exception chain and the GDAL messages logged
+    during the read. Kinds are the keys of READ_KINDS."""
+    if isinstance(exc, ReadError):
+        return exc.kind, exc.status
+    chain = _exc_chain(exc)
+    text = "\n".join([str(e) for e in chain] + [str(m) for m in messages])
+    status = _pick_status({int(c) for rx in _STATUS_RES for c in rx.findall(text)})
+    expiry = _sas_expiry(href) if href else None
+    if expiry is not None and expiry <= (now or _now()) and status in (None, 403):
+        return "expired", status
+    if status is not None and status >= 400:
+        return _STATUS_KIND.get(status, "server" if status >= 500 else "io"), status
+    for kind, rx in _MESSAGE_KINDS:
+        if rx.search(text):
+            return kind, status
+    if status in (0, 206):
+        return _STATUS_KIND[status], status
+    io_like = any(isinstance(e, OSError) or type(e).__module__.startswith("rasterio") for e in chain)
+    return ("io" if io_like else "error"), status
+
+
+_URL_RE = re.compile(r"(?:/vsicurl/)?https?://[^\s,'\"()]+")
+
+
+def _clean(text, limit=200):
+    """An error message fit for the UI and reports: URLs cut to their file name and no SAS token fragments
+    (GDAL prefixes block errors with the tail of the signed URL, e.g. "...%3D, band 1: IReadBlock failed")."""
+    text = _URL_RE.sub(lambda m: _file_name(m.group(0)), str(text))
+    text = re.sub(r"\S+, band (\d+): ", r"band \1: ", text)
+    text = re.sub(r"\?[^\s,'\")]+", "", text)
+    text = re.sub(r"\b(?:sig|se|st|sp|sv|sr|skoid|sktid|skt|ske|sks|skv)=[^&\s,]*&?", "", text)
+    text = re.sub(r"\S*%(?:3D|2F|2B)\S*", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
+# GDAL messages that rasterio logs during a read, kept per thread to classify a failure. The handler only
+# listens; it changes no logger level, so it sees what the app's logging configuration lets through (warnings
+# such as "Request for A-B failed with response_code=206"), and the exception chain carries the errors.
+_READ_LOG = threading.local()
+
+
+class _ReadMessages(logging.Handler):
+    def emit(self, record):
+        lines = getattr(_READ_LOG, "lines", None)
+        if lines is not None:
+            try:
+                lines.append(record.getMessage())
+            except Exception:
+                pass
+
+
+logging.getLogger("rasterio._err").addHandler(_ReadMessages())
+
+_REMOTE_SLOTS = threading.BoundedSemaphore(max(1, MAX_REMOTE_READS))
+_RETRY_IDS = itertools.count(1)
+_SIGN_LOCK = threading.Lock()
+_STATS_LOCK = threading.Lock()
+READ_STATS = {"retried": 0, "recovered": 0, "failed": 0}  # process-wide counts of remote whole-read retries
+
+
+def _count(key):
+    with _STATS_LOCK:
+        READ_STATS[key] += 1
+
+
+def _is_pc_blob(href):
+    return urlsplit(href).netloc.endswith(".blob.core.windows.net") and "sig=" in href
+
+
+def _resign(href, force=False):
+    """The href signed afresh by Planetary Computer. `force` also drops a cached token the server refused."""
+    import planetary_computer
+    from planetary_computer import sas
+    base = href.split("?", 1)[0]
+    with _SIGN_LOCK:
+        url = planetary_computer.sign(base)
+        if force and parse_qs(urlsplit(url).query).get("sig") == parse_qs(urlsplit(href).query).get("sig"):
+            parts = urlsplit(base)
+            suffix = f"/{parts.netloc.split('.')[0]}/{parts.path.lstrip('/').split('/', 1)[0]}"
+            for key in [k for k in sas.TOKEN_CACHE if k.endswith(suffix)]:
+                sas.TOKEN_CACHE.pop(key, None)
+            url = planetary_computer.sign(base)
+    return url
+
+
+def _signed(href, refused=False):
+    """`href`, re-signed when it is a Planetary Computer href whose token was refused or expires within
+    SAS_MARGIN_S."""
+    if not _is_pc_blob(href):
+        return href
+    expiry = _sas_expiry(href)
+    if refused or (expiry is not None and (expiry - _now()).total_seconds() < SAS_MARGIN_S):
+        try:
+            return _resign(href, force=refused)
+        except Exception as exc:
+            log.warning("Could not re-sign %s: %s", _file_name(href), _clean(exc))
+    return href
+
+
 def read_on_grid(href, grid, resampling=Resampling.nearest):
-    """Read band 1 of a raster onto `grid` as float32, NaN where the source has no data."""
+    """Read band 1 of a raster onto `grid` as float32, NaN where the source has no data.
+
+    Remote reads are retried (see _read_on_grid); one that still fails raises ReadError."""
     return _on_io(_read_on_grid, href, grid, resampling)
 
 
 def _read_on_grid(href, grid, resampling):
+    """Retry a remote read as a whole, with backoff, at most MAX_REMOTE_READS at a time.
+
+    Each retry requests a new URL (an extra `khetos_retry` query parameter, which Azure and DLR ignore): GDAL
+    caches downloaded ranges, including a truncated one, and a failed existence check by URL, so the same URL
+    could fail again from cache. Refused or expiring Planetary Computer tokens are renewed.
+    """
+    if not str(href).startswith(("http://", "https://")):
+        return _read_once(href, grid, resampling)
+    signed, kind, status, last = _signed(href), None, None, None
+    attempt = 0
+    while True:
+        attempt += 1
+        url = signed if attempt == 1 else f"{signed}{'&' if '?' in signed else '?'}khetos_retry={next(_RETRY_IDS)}"
+        _READ_LOG.lines = deque(maxlen=40)
+        try:
+            with _REMOTE_SLOTS:
+                out = _read_once(url, grid, resampling)
+            if attempt > 1:
+                _count("recovered")
+            return out
+        except Exception as exc:
+            kind, status = classify_read_error(exc, _READ_LOG.lines, url)
+            last = exc
+        finally:
+            _READ_LOG.lines = None
+        if attempt >= min(READ_ATTEMPTS, _MAX_ATTEMPTS.get(kind, READ_ATTEMPTS)):
+            break
+        _count("retried")
+        refused = kind in ("expired", "forbidden")
+        delay = 0.0 if refused else READ_BACKOFF_S * 3 ** (attempt - 1) * random.uniform(0.75, 1.25)
+        log.info("Retrying %s in %.0f s (%s%s, attempt %d)", _file_name(href), delay, READ_KINDS[kind],
+                 f", HTTP {status}" if status is not None else "", attempt)
+        if delay:
+            time.sleep(delay)
+        signed = _signed(signed, refused)
+    _count("failed")
+    name = _file_name(href)
+    raise ReadError(f"{name}: {READ_KINDS[kind]}" + (f" (HTTP {status})" if status is not None else "")
+                    + f" after {attempt} attempt{'s' if attempt > 1 else ''}: {_clean(last)}",
+                    kind, status, attempt, name) from last
+
+
+def _read_once(href, grid, resampling):
     with rasterio.Env(**GDAL_ENV), rasterio.open(href) as src:
         return _dataset_on_grid(src, grid, resampling)
 
@@ -303,16 +545,57 @@ def _pmap(fn, items, io=True):
     return [f.result() for f in futures]
 
 
-def _safe(fn):
-    """Wrap a per-scene reader so one unreadable scene does not sink a multi-scene analysis."""
+def _safe(fn, skipped=None, stage=None):
+    """Wrap a per-scene reader so one unreadable scene does not sink a multi-scene analysis.
+
+    Pass a list as `skipped` to collect a skip_record for every scene left out, so the caller can report it.
+    """
     def run(x):
         try:
             return fn(x)
         except Exception as exc:
             item = x[0] if isinstance(x, tuple) else x  # (item, clear mask) pairs: name the item, not the mask
-            log.warning("Skipping %s: %s", getattr(item, "id", item), exc)
+            log.warning("Skipping %s: %s", getattr(item, "id", item), _clean(exc, 300))
+            if skipped is not None:
+                skipped.append(skip_record(item, exc, stage))
             return None
     return run
+
+
+def skip_record(item, exc, stage=None):
+    """What a report needs about a scene left out: id, date, stage ('screen' = cloud mask, 'bands'), the
+    READ_KINDS reason and the cleaned error."""
+    dt = getattr(item, "datetime", None)
+    return {"scene": getattr(item, "id", str(item)), "date": dt.date().isoformat() if dt else None,
+            "stage": stage, "reason": classify_read_error(exc)[0], "detail": _clean(exc)}
+
+
+def skip_reasons(skipped):
+    """'2 transfer cut short, 1 server busy or throttling' for a list of skip records."""
+    counts = {}
+    for s in skipped:
+        r = READ_KINDS.get(s["reason"], s["reason"])
+        counts[r] = counts.get(r, 0) + 1
+    return ", ".join(f"{n} {r}" for r, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
+def skip_note(skipped, what="Sentinel-2 scene"):
+    """One sentence for the UI about scenes that could not be read, or None when every scene was read."""
+    if not skipped:
+        return None
+    n = len(skipped)
+    dates = sorted({s["date"] for s in skipped if s.get("date")})
+    shown = ", ".join(dates[:8]) + (" …" if len(dates) > 8 else "")
+    return (f"{n} {what}{'s' if n > 1 else ''} could not be read and {'were' if n > 1 else 'was'} left out "
+            f"({skip_reasons(skipped)}{'; ' + shown if shown else ''}). The result rests on the scenes that "
+            "were read; run it again later to try the missing ones.")
+
+
+def skip_summary(skipped):
+    """Report fields for skipped scenes: count, reasons and one line per scene."""
+    return {"skipped_scenes": len(skipped or []), "skipped_reasons": skip_reasons(skipped or []),
+            "skipped_detail": "; ".join(f"{s['date'] or s['scene']} ({s['stage'] or 'read'}): {s['detail']}"
+                                        for s in skipped or [])}
 
 
 def normalized_difference(a, b):
@@ -375,6 +658,7 @@ class S2Scene:
     coverage: float  # share of AOI pixels with data
     clear_fraction: float  # share of AOI pixels that are clear
     bands: dict = field(default_factory=dict)
+    skipped: list = field(default_factory=list)  # skip_records of newer scenes that could not be read
 
     @property
     def date(self):
@@ -420,47 +704,71 @@ def _one_per_day(items, bbox):
     return sorted((v[1] for v in best.values()), key=lambda i: i.datetime, reverse=True)
 
 
-def find_clear_s2(bbox, grid, aoi, start, end, max_cloud_pct=35, want=1, max_checks=24, min_coverage=0.9):
-    """Newest scenes whose AOI (not tile) cloud share is within `max_cloud_pct`, screened with the SCL band."""
+def _iter_clear_s2(bbox, grid, aoi, start, end, max_cloud_pct=35, max_checks=24, min_coverage=0.9, skipped=None):
+    """(scene, item) pairs, newest first, whose AOI (not tile) cloud share is within `max_cloud_pct`, screened
+    with the SCL band six at a time."""
     items = search_s2(bbox, start, end, max_tile_cloud=min(95, max_cloud_pct + 50), max_items=150)
     items = _one_per_day(items, bbox)[:max_checks]
     min_clear = 1 - max_cloud_pct / 100
-    found = []
     for i in range(0, len(items), 6):
-        for res in _pmap(_safe(lambda it: _screen_s2(it, grid, aoi)), items[i:i + 6]):
+        for res in _pmap(_safe(lambda it: _screen_s2(it, grid, aoi), skipped, "screen"), items[i:i + 6]):
             if res and res[0].coverage >= min_coverage and res[0].clear_fraction >= min_clear:
-                found.append(res)
+                yield res
+
+
+def find_clear_s2(bbox, grid, aoi, start, end, max_cloud_pct=35, want=1, max_checks=24, min_coverage=0.9,
+                  skipped=None):
+    """Newest scenes whose AOI (not tile) cloud share is within `max_cloud_pct`, screened with the SCL band."""
+    found = []
+    for res in _iter_clear_s2(bbox, grid, aoi, start, end, max_cloud_pct, max_checks, min_coverage, skipped):
+        found.append(res)
         if len(found) >= want:
             break
-    return found[:want]
+    return found
+
+
+def _first_readable_s2(candidates, grid, skipped, tries=3):
+    """The first clear scene whose bands can be read, trying at most `tries`; unreadable ones go to `skipped`."""
+    for n, (scene, item) in enumerate(candidates, 1):
+        try:
+            scene.bands = _read_s2_bands(item, grid)
+            return scene
+        except Exception as exc:
+            log.warning("Skipping %s: %s", item.id, _clean(exc, 300))
+            skipped.append(skip_record(item, exc, "bands"))
+        if n >= tries:
+            break
+    return None
 
 
 def latest_clear_s2(bbox, geometry=None, months=6, max_cloud_pct=35, res=10, max_px=1024):
-    """Most recent Sentinel-2 scene that is clear over the AOI, with B04/B08/B11 read on a UTM grid."""
+    """Most recent Sentinel-2 scene that is clear over the AOI and can be read, with B04/B08/B11 on a UTM grid.
+
+    Newer scenes that could not be read are listed in the scene's `skipped`."""
     grid = make_grid(bbox, res, max_px)
     aoi = geometry_pixels(grid, geometry)
     if not aoi.any():
         raise ValueError("The area is smaller than one pixel; draw a larger field.")
     end = _now()
-    found = find_clear_s2(bbox, grid, aoi, end - timedelta(days=round(30.44 * months)), end, max_cloud_pct)
-    if not found:
+    skipped = []
+    scene = _first_readable_s2(_iter_clear_s2(bbox, grid, aoi, end - timedelta(days=round(30.44 * months)), end,
+                                              max_cloud_pct, skipped=skipped), grid, skipped)
+    if scene is None:
+        note = skip_note(skipped)
         raise RuntimeError(f"No Sentinel-2 scene in the last {months} months has at least "
-                           f"{100 - max_cloud_pct}% clear pixels over this area. Widen the history window "
-                           "or raise the cloud tolerance.")
-    scene, item = found[0]
-    scene.bands = _read_s2_bands(item, grid)
+                           f"{100 - max_cloud_pct}% clear pixels over this area" +
+                           (f" among those that could be read. {note}" if note else
+                            ". Widen the history window or raise the cloud tolerance."))
+    scene.skipped = skipped
     return scene
 
 
 def previous_clear_s2(scene, bbox, max_cloud_pct=35, lookback_days=75, min_gap_days=4):
-    """The clear scene before `scene` on the same grid and AOI, or None."""
+    """The clear, readable scene before `scene` on the same grid and AOI, or None. Scenes that could not be read
+    are added to `scene.skipped`."""
     end = scene.datetime - timedelta(days=min_gap_days)
-    found = find_clear_s2(bbox, scene.grid, scene.aoi, end - timedelta(days=lookback_days), end, max_cloud_pct)
-    if not found:
-        return None
-    prev, item = found[0]
-    prev.bands = _read_s2_bands(item, scene.grid)
-    return prev
+    return _first_readable_s2(_iter_clear_s2(bbox, scene.grid, scene.aoi, end - timedelta(days=lookback_days), end,
+                                             max_cloud_pct, skipped=scene.skipped), scene.grid, scene.skipped)
 
 
 def scene_metrics(scene, crop_mask=None, min_crop_pixels=50):
@@ -485,8 +793,10 @@ def _thin(items, n):
     return [min((items[j] for j in b), key=lambda i: i.properties.get("eo:cloud_cover", 100)) for b in bins if len(b)]
 
 
-def trend_series(bbox, months=6, max_cloud_pct=35, max_scenes=24):
-    """NDVI/NDMI time series over the AOI's cropland from SCL-screened Sentinel-2 scenes (20 m grid)."""
+def trend_series(bbox, months=6, max_cloud_pct=35, max_scenes=24, skipped=None):
+    """NDVI/NDMI time series over the AOI's cropland from SCL-screened Sentinel-2 scenes (20 m grid).
+
+    Scenes that could not be read are left out; pass a list as `skipped` to get their skip_records."""
     grid = make_grid(bbox, res=20, max_px=512)
     aoi = geometry_pixels(grid)
     try:
@@ -500,14 +810,23 @@ def trend_series(bbox, months=6, max_cloud_pct=35, max_scenes=24):
     items = _thin(_one_per_day(items, bbox), max_scenes)
     min_clear = 1 - max_cloud_pct / 100
 
+    stage = {}
+
     def row(item):
+        stage[item.id] = "screen"
         scene, _ = _screen_s2(item, grid, aoi)
         if scene.coverage < 0.9 or scene.clear_fraction < min_clear:
             return None
+        stage[item.id] = "bands"
         scene.bands = _read_s2_bands(item, grid)
         return scene_metrics(scene, crop)
 
-    rows = [r for r in _pmap(_safe(row), items, io=False) if r]
+    lost = []
+    rows = [r for r in _pmap(_safe(row, lost), items, io=False) if r]
+    for s in lost:
+        s["stage"] = stage.get(s["scene"])
+    if skipped is not None:
+        skipped.extend(sorted(lost, key=lambda s: s["date"] or ""))
     cols = ["date", "ndvi", "ndmi", "clear_pct", "pixels", "pixels_used", "scene", "tile_cloud_pct"]
     if not rows:
         return pd.DataFrame(columns=cols + ["ndvi_change", "ndmi_change", "days_since_prev"])
@@ -525,15 +844,16 @@ def s2_window_greenest(bbox, grid, aoi, start, end, max_scenes=8, min_clear=0.05
 
     Each scene is masked pixel by pixel with its scene classification, so partly cloudy monsoon scenes still
     contribute their clear pixels. The greenest look makes the result insensitive to harvest dates inside the
-    window.
+    window. `skipped` lists the scenes that could not be read.
     """
     n = max(int(aoi.sum()), 1)
     items = _thin(_one_per_day(search_s2(bbox, start, end, max_tile_cloud=90, max_items=150), bbox), 3 * max_scenes)
+    skipped = []
 
     def screen(item):
         return item, aoi & scl_clear(read_on_grid(item.assets["SCL"].href, grid, Resampling.nearest))
 
-    usable = sorted((r for r in _pmap(_safe(screen), items) if r and r[1].sum() >= min_clear * n),
+    usable = sorted((r for r in _pmap(_safe(screen, skipped, "screen"), items) if r and r[1].sum() >= min_clear * n),
                     key=lambda r: r[0].datetime)
     if len(usable) > max_scenes:
         bins = np.array_split(np.arange(len(usable)), max_scenes)
@@ -548,14 +868,17 @@ def s2_window_greenest(bbox, grid, aoi, start, end, max_scenes=8, min_clear=0.05
         swir[~clear] = np.nan
         return item, ndvi, swir
 
-    looks = [r for r in _pmap(_safe(read), usable, io=False) if r]
+    looks = [r for r in _pmap(_safe(read, skipped, "bands"), usable, io=False) if r]
+    skipped.sort(key=lambda s: s["date"] or "")
     if not looks:
-        raise RuntimeError(f"No clear Sentinel-2 look between {start:%d %b %Y} and {end:%d %b %Y}")
+        note = skip_note(skipped)
+        raise RuntimeError(f"No clear Sentinel-2 look between {start:%d %b %Y} and {end:%d %b %Y}"
+                           + (f". {note}" if note else ""))
     ndvi = np.stack([r[1] for r in looks])
     return {"ndvi_max": _nanstat(np.nanmax, ndvi),  # pixels never seen clear stay NaN
             "swir_median": _nanstat(np.nanmedian, np.stack([r[2] for r in looks])),
             "n_obs": np.isfinite(ndvi).sum(axis=0),
-            "dates": [r[0].datetime.date().isoformat() for r in looks]}
+            "dates": [r[0].datetime.date().isoformat() for r in looks], "skipped": skipped}
 
 
 # ------------------------------------------------------------------------------------- land cover
@@ -878,6 +1201,7 @@ class LandsatComposite:
     peak_scenes: int
     slc_off_scenes: int
     scene_ids: list
+    skipped: list = field(default_factory=list)  # skip_records of scenes that could not be read
 
     @property
     def scenes(self):
@@ -907,10 +1231,14 @@ def landsat_season_composite(geometry, year, max_scenes=8, min_clear=0.3):
     def screen(item):
         return item, inside & landsat_clear(read_on_grid(item.assets["qa_pixel"].href, grid))
 
-    usable = [r for r in _pmap(_safe(screen), items[:30]) if r and r[1].sum() / n >= min_clear]
+    skipped = []
+    usable = [r for r in _pmap(_safe(screen, skipped, "screen"), items[:30]) if r and r[1].sum() / n >= min_clear]
     chosen = choose_landsat_scenes(usable, max_scenes)
     if not chosen:
-        raise RuntimeError(f"Every Landsat scene between Nov {year - 1} and Apr {year} is cloudy over this corridor")
+        note = skip_note(skipped, "Landsat scene")
+        raise RuntimeError(f"Every Landsat scene between Nov {year - 1} and Apr {year} "
+                           + (f"that could be read is cloudy over this corridor. {note}" if note else
+                              "is cloudy over this corridor"))
 
     def indices(pair):
         item, clear = pair
@@ -923,9 +1251,10 @@ def landsat_season_composite(geometry, year, max_scenes=8, min_clear=0.3):
             v[~clear] = np.nan
         return item, idx
 
-    scenes = [r for r in _pmap(_safe(indices), chosen, io=False) if r]
+    scenes = [r for r in _pmap(_safe(indices, skipped, "bands"), chosen, io=False) if r]
+    skipped.sort(key=lambda s: s["date"] or "")
     if not scenes:
-        raise RuntimeError(f"Landsat scenes for {year} could not be read")
+        raise RuntimeError(f"Landsat scenes for {year} could not be read ({skip_reasons(skipped)})")
     ndvi = np.stack([s[1]["ndvi"] for s in scenes])
     stats = {"ndvi_max": _nanstat(np.nanmax, ndvi),  # pixels never seen clear stay NaN
              "mndwi_median": _nanstat(np.nanmedian, np.stack([s[1]["mndwi"] for s in scenes]))}
@@ -937,7 +1266,7 @@ def landsat_season_composite(geometry, year, max_scenes=8, min_clear=0.3):
         platforms=", ".join(sorted({s[0].properties.get("platform", "?") for s in scenes})),
         peak_scenes=sum(_in_peak(s[0].datetime) for s in scenes),
         slc_off_scenes=sum(_slc_off(s[0]) for s in scenes),
-        scene_ids=[s[0].id for s in scenes])
+        scene_ids=[s[0].id for s in scenes], skipped=skipped)
 
 
 def composite_quality(m):
@@ -991,7 +1320,10 @@ def composite_shares(comp, geometry):
            "dates": ", ".join(comp.dates), "platforms": comp.platforms,
            "median_clear_obs": float(np.median(comp.n_obs[valid])),
            "coverage_pct": round(100 * float(valid.sum()) / max(n, 1), 1),
-           "pixels": int(valid.sum()), "scene_ids": ", ".join(comp.scene_ids)}
+           "pixels": int(valid.sum()), "scene_ids": ", ".join(comp.scene_ids),
+           "skipped_scenes": len(comp.skipped),
+           "skipped_dates": ", ".join(s["date"] or s["scene"] for s in comp.skipped),
+           "skipped_reasons": skip_reasons(comp.skipped)}
     out["quality"], out["quality_notes"] = composite_quality(out)
     return out
 

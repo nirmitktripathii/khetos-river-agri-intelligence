@@ -11,6 +11,7 @@ NAV_ITEMS = [
     "🤖 Ask the Map",
     "🌊 Nakatiya River Observatory",
     "🏘 Land Change / Riparian Change",
+    "📈 River Water Watch",
 ]
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -48,6 +49,8 @@ ATTRIBUTIONS = {
     "River geometry": "(c) OpenStreetMap contributors, ODbL 1.0",
     "District boundaries": "geoBoundaries gbOpen IND ADM2, ODbL 1.0",
     "Weather": "Weather data by Open-Meteo.com, CC BY 4.0",
+    "Modelled river flow": "GEOGLOWS v2 retrospective and forecast flows (ECMWF ERA5 runoff routed on TDX-Hydro, "
+                           "geoglows.ecmwf.int), CC BY 4.0",
 }
 DISCLAIMER = ("Remote-sensing outputs are change signals for follow-up. They are not legal, cadastral, "
               "encroachment or agronomic determinations; verify with field and revenue-record evidence before acting.")

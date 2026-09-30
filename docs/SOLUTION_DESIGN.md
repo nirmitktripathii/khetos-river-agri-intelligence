@@ -30,6 +30,12 @@ Streamlit script thread ── eo.run_analysis ──► _ANALYSIS_POOL (4)
 
 The pools are persistent daemon threads, so no thread that has touched GDAL ever exits. That prevents the Windows deadlock. Results are cached by Streamlit per area, buffer and year.
 
+Remote reads are resilient but honest:
+- A semaphore allows at most 8 remote reads per process.
+- Each read gets up to 4 whole attempts, with backoff and a fresh URL. A refused or expiring SAS token is re-signed.
+- A scene that still fails is recorded as skipped, with its date, stage and a classified reason (throttled, expired, truncated, timeout and so on).
+- Skipped scenes appear as a warning and in the downloaded report. A result with skips is shown but not cached, so a later run fills the gap.
+
 ## Roadmap (in priority order)
 
 1. **Close the origin gap.** Trace the channel from Dehnagar to the mapped head:

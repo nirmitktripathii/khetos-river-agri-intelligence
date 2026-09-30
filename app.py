@@ -9,6 +9,7 @@ Every analysis runs through `eo.run_analysis` on long-lived worker threads. Stre
 that exits afterwards, and on Windows a thread that exits while holding GDAL state can deadlock later thread starts,
 so nothing on the script thread touches GDAL (map overlays are reprojected on the I/O threads too).
 """
+import functools
 import json
 import logging
 import math
@@ -24,7 +25,7 @@ from pyproj import Geod
 from shapely.geometry import shape
 from streamlit_folium import st_folium
 
-from src import ai, analytics, eo
+from src import ai, analytics, eo, flow
 from src import river as rv
 from src.boundaries import load_districts
 from src.config import (APP_TITLE, ATTRIBUTIONS, DEFAULT_AOI, DISCLAIMER, NAKATIYA_REACHES, NAV_ITEMS, NEWS_CONTEXT,
@@ -42,7 +43,7 @@ log = logging.getLogger("khetos.app")
 
 TTL = 6 * 3600
 PAGES = dict(zip(["overview", "change-radar", "field-scanner", "water", "fusion", "scouting", "ask", "river",
-                  "land-change"], NAV_ITEMS))
+                  "land-change", "river-flow"], NAV_ITEMS))
 WHOLE_RIVER = "Whole mapped river"
 REACH_OPTIONS = [*NAKATIYA_REACHES, WHOLE_RIVER]
 BUFFER_OPTIONS = [10, 25, rv.GREEN_BELT_M, 50, 100, 250, 500, 1000]
@@ -145,11 +146,39 @@ def course_facts(fc):
 
 # ------------------------------------------------------------------ cached analyses (worker threads)
 
+def has_skips(res):
+    """True when an analysis result left out satellite scenes that could not be read."""
+    if not isinstance(res, dict):
+        return False
+    if res.get("skipped") or res.get("skipped_now") or res.get("skipped_reference"):
+        return True
+    return any(has_skips(v) if isinstance(v, dict) else
+               isinstance(v, pd.DataFrame) and "skipped_scenes" in v and bool((v["skipped_scenes"] > 0).any())
+               for v in res.values())
+
+
+def retry_incomplete(cached):
+    """Show a result that left out unreadable scenes but drop it from the cache, so the next run tries them
+    again instead of serving the gap for the whole cache lifetime."""
+    @functools.wraps(cached)
+    def call(*args):
+        res = cached(*args)
+        if has_skips(res):
+            cached.clear(*args)
+        return res
+    call.clear = cached.clear
+    return call
+
+
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=8, show_spinner=False)
 def cached_trend(bbox, months, cloud):
-    return eo.run_analysis(eo.trend_series, bbox, months, cloud)
+    skipped = []
+    series = eo.run_analysis(eo.trend_series, bbox, months, cloud, skipped=skipped)
+    return {"series": series, "skipped": skipped}
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=8, show_spinner=False)
 def cached_field_scan(bbox, geometry, months, cloud):
     return eo.run_analysis(analytics.field_scan, bbox, geometry, months, cloud)
@@ -165,26 +194,31 @@ def cached_radar_pair(bbox):
     return eo.run_analysis(analytics.radar_pair, bbox)
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=4, show_spinner=False)
 def cached_scouting(bbox, months, cloud):
     return eo.run_analysis(analytics.make_scouting_grid, bbox, months, cloud)
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=4, show_spinner=False)
 def cached_fields_near(distance_m, point, radius_km, months, cloud, river):
     return eo.run_analysis(analytics.fields_near_river, distance_m, point, radius_km, months, cloud, river)
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=8, show_spinner=False)
 def cached_land_change(point, radius_km, buffer_m, year_a, year_b, river):
     return eo.run_analysis(rv.river_land_change, point, radius_km, buffer_m, year_a, year_b, river)
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=4, show_spinner=False)
 def cached_ladder(point, radius_km, buffers, year_a, year_b, river):
     return eo.run_analysis(rv.river_buffer_ladder, point, radius_km, buffers, year_a, year_b, river)
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=4, show_spinner=False)
 def cached_timeline(point, radius_km, buffer_m, years, river):
     return eo.run_analysis(rv.river_timeline, point, radius_km, buffer_m, years, river)
@@ -195,11 +229,13 @@ def cached_water_watch(point, radius_km, buffer_m, river):
     return eo.run_analysis(rv.corridor_water_watch, point, radius_km, buffer_m, river)
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=6, show_spinner=False)
 def cached_riparian(point, radius_km, buffer_m, year, river):
     return eo.run_analysis(rv.riparian_health, point, radius_km, buffer_m, river, year)
 
 
+@retry_incomplete
 @st.cache_data(ttl=TTL, max_entries=6, show_spinner=False)
 def cached_alerts(point, radius_km, buffer_m, window_days, river):
     return eo.run_analysis(rv.construction_alerts, point, radius_km, buffer_m, window_days, river)
@@ -260,6 +296,7 @@ def compute_fusion(bbox, months, cloud):
     scan = cached_field_scan(bbox, None, months, cloud)
     sar_now, sar_prev = cached_radar_pair(bbox)
     return {"bbox": bbox, "optical_now": scan["latest"], "optical_prev": scan["previous"],
+            "skipped": scan.get("skipped"),
             "radar_now": sar_now, "radar_prev": sar_prev,
             "assessment": analytics.fusion_assessment(scan["latest"], scan["previous"], sar_now, sar_prev)}
 
@@ -317,6 +354,15 @@ def show_caveats(caveats):
     if caveats:
         with st.expander(f"Caveats ({len(caveats)})", expanded=True, icon=":material/warning:"):
             st.markdown(bullets(caveats))
+
+
+def show_skips(skipped, what="Sentinel-2 scene"):
+    """Warn about scenes an analysis could not read and left out."""
+    note = eo.skip_note(skipped, what)
+    if note:
+        st.warning(note, icon=":material/cloud_off:")
+        with st.expander(f"Unread scenes ({len(skipped)})"):
+            st.dataframe(pd.DataFrame(skipped), hide_index=True)
 
 
 def show_method(text):
@@ -496,7 +542,7 @@ def render_qila(_, key):
 
 
 def render_radar(r, key):
-    df = r["trend"]
+    df, skipped = r["trend"]["series"], r["trend"]["skipped"]
     sig = analytics.change_signal(df) if len(df) else None
     if sig is None:
         st.warning("Fewer than two clear scenes in the window: widen the history window or raise the cloud "
@@ -510,8 +556,9 @@ def render_radar(r, key):
                     help="Canopy water content")
         c[2].metric("Change score", f"{sig['score']:.0f} / 100",
                     help="50 = an ordinary move for this area; higher = a more unusual decline")
-        c[3].metric("Clear scenes", len(df))
+        c[3].metric("Clear scenes", len(df), help=f"{len(skipped)} more could not be read" if skipped else None)
         st.caption(f"{sig['previous_date']} → {sig['latest_date']} · scored by {sig['method']}")
+    show_skips(skipped)
     if len(df):
         st.altair_chart(trend_chart(df), width="stretch")
     scan = r.get("scan")
@@ -529,7 +576,8 @@ def render_radar(r, key):
         st.dataframe(df, hide_index=True)
     with st.container(horizontal=True):
         download_csv(df, f"{key}_scenes")
-        download_report("Change radar", {"area_bbox": r["bbox"], **(sig or {}), "scenes": df}, f"{key}_radar")
+        download_report("Change radar", {"area_bbox": r["bbox"], **(sig or {}), **eo.skip_summary(skipped),
+                                         "scenes": df}, f"{key}_radar", [eo.skip_note(skipped)] if skipped else None)
 
 
 def render_field(r, key):
@@ -546,6 +594,7 @@ def render_field(r, key):
                f"{prev['date'] if prev else 'none in the 75 days before'} · crop as reported: {r['crop']}")
     if r.get("weather_error"):
         st.warning(f"Weather unavailable, so no water balance: {r['weather_error']}")
+    show_skips(r.get("skipped"))
     left, right = st.columns([3, 2])
     with left:
         m = base_map(r["bbox"], satellite=True)
@@ -566,10 +615,11 @@ def render_field(r, key):
             st.markdown(bullets(brief["limits"]))
     weather = {k: v for k, v in (r["weather"] or {}).items() if k != "daily"}
     notes = ([f"Finding: {s}" for s in brief["findings"]] + [f"Check: {s}" for s in brief["checks"]]
-             + [f"Limit: {s}" for s in brief["limits"]])
+             + [f"Limit: {s}" for s in brief["limits"]]
+             + ([f"Limit: {eo.skip_note(r['skipped'])}"] if r.get("skipped") else []))
     download_report("Field brief", {"crop_reported": r["crop"], "area_bbox": r["bbox"], "latest_scene": latest,
-                                    "previous_scene": prev, "weather": weather, "water_stress": stress},
-                    f"{key}_field", notes)
+                                    "previous_scene": prev, **eo.skip_summary(r.get("skipped")), "weather": weather,
+                                    "water_stress": stress}, f"{key}_field", notes)
 
 
 def render_water(r, key):
@@ -585,6 +635,8 @@ def render_water(r, key):
     for err in (r["scan_error"], r["weather_error"]):
         if err:
             st.warning(err)
+    if scan:
+        show_skips(scan.get("skipped"))
     if w:
         st.caption(f"{w['period']} · Open-Meteo model cell {w['model_cell']} (a ~10 km forecast-model grid, not a "
                    "gauge on this field)")
@@ -606,7 +658,7 @@ def render_water(r, key):
                    "dry, teal is wet. Bare soil also reads dry.")
     data = {"area_bbox": r["bbox"], "water_stress": stress,
             "weather": {k: v for k, v in (w or {}).items() if k != "daily"},
-            "latest_scene": scan["latest"] if scan else None}
+            "latest_scene": scan["latest"] if scan else None, **eo.skip_summary(scan.get("skipped") if scan else None)}
     download_report("Water and moisture signals", data, f"{key}_water")
 
 
@@ -627,12 +679,14 @@ def render_fusion(r, key):
               "orbit": f"{m['relative_orbit']} {m['orbit_state']}", "pixels": m["pixels"]}
              for name, m in (("Sentinel-1 latest", r["radar_now"]), ("Sentinel-1 previous", r["radar_prev"])) if m]
     st.dataframe(pd.DataFrame(rows), hide_index=True)
+    show_skips(r.get("skipped"))
     st.caption("Radar backscatter responds to canopy structure and moisture and sees through cloud; optical NDVI "
                "responds to greenness. When both move the same way the change is more likely real; when they "
                "disagree (e.g. harvest residue, flooding, rain on the leaves) it needs a field visit.")
     download_report("SAR + optical fusion", {"area_bbox": r["bbox"], "assessment": a, "optical_latest": r["optical_now"],
                                              "optical_previous": r["optical_prev"], "radar_latest": r["radar_now"],
-                                             "radar_previous": r["radar_prev"]}, f"{key}_fusion")
+                                             "radar_previous": r["radar_prev"], **eo.skip_summary(r.get("skipped"))},
+                    f"{key}_fusion")
 
 
 def render_scouting(r, key):
@@ -642,6 +696,7 @@ def render_scouting(r, key):
         col.metric(p.capitalize(), int(counts.get(p, 0)))
     st.caption(f"Latest clear scene {r['date']} · previous {r['previous_date'] or 'none'} · {r['cell_m']} m cells · "
                f"{r['model']} · cropland: {r['cropland_source']}")
+    show_skips(r.get("skipped"))
     m = base_map(r["bbox"], satellite=True)
     add_scouting_cells(m, r["geojson"])
     if r["near"]:
@@ -795,6 +850,7 @@ def render_riparian(r, key):
     c[3].metric("Clear looks", f"{r['looks_now']} / {r['looks_reference']}", help="This year / the year before")
     st.caption(f"Tree cover: {fmt(r['trees_pct'], '.1f', '%')} of the corridor (Impact Observatory {r['trees_year']}) · "
                f"median greenest-NDVI change {fmt(r['median_ndvi_change'], '+.3f')}")
+    show_caveats(r.get("caveats"))
     overlays = [(r["ndvi_now"], r["grid"], f"Greenest NDVI, {r['window']}", -0.1, 0.9, RDYLGN, False),
                 (r["ndvi_change"], r["grid"], "Greenest-NDVI change on a year earlier", -0.4, 0.4, BRBG, True)]
     show_map(corridor_map(r["corridor"], key, f"{r['buffer_m']} m corridor", overlays), f"{key}_riparian_map", 460)
@@ -945,6 +1001,7 @@ def page_overview(ctx):
 | Ask the Map | Plain-language questions, routed to the analyses | all of the above |
 | Nakatiya River Observatory | Built-up over the years, change flags, flood watch, riparian health, construction alerts | WSF Evolution, Impact Observatory, Landsat, Sentinel-1/2, JRC |
 | Land Change / Riparian | Change by distance from the river, and its history since 1990 | as above |
+| River Water Watch | How much water the river carries, season by season and over the decades; field readings | GEOGLOWS model, Sentinel-2, your float measurements |
 """)
     with st.expander("Reported context (press and plan documents, not verified by KhetOS)", icon=":material/news:"):
         st.markdown(bullets(f"**{outlet}**, {when}: {text} [Link]({url})" for when, outlet, text, url in NEWS_CONTEXT))
@@ -1231,9 +1288,323 @@ def page_land_change(ctx):
             show_stored("res_timeline", params, render_timeline, "lc")
 
 
+# ----------------------------------------------------------------------------------- river water watch
+
+FLOW_BANNER = ("**Modelled, not measured.** These flows come from a global weather-driven model (GEOGLOWS). They "
+               "leave out the city, sewage, irrigation, canals and groundwater pumping, and no gauge measures the "
+               "Nakatiya. Use them for timing and seasons, not as the river's true discharge.")
+WORKBOOK = flow.DATA_DIR / "nakatiya_flow_history.xlsx"
+WIDTH_REACHES = {"upper": "Upper (30.1 km)", "urban": "Urban (14.5 km)", "lower": "Lower (14.6 km)"}
+FLOW_COLORS = {"above": "#2E7D32", "entering": "#9E9D24", "below": "#EF6C00", "mouth": "#0277BD",
+               "ramganga": "#6D4C41"}
+
+
+@st.cache_data(show_spinner=False)
+def flow_series():
+    """The bundled daily flows without the warm-up years."""
+    return flow.load_daily().loc[f"{flow.WARMUP_YEARS[-1] + 1}-01-01":]
+
+
+@st.cache_data(show_spinner=False)
+def flow_tables(key):
+    """Every table the page shows for one segment, built once."""
+    s = flow_series()[key].dropna()
+    ann = flow.annual_table(s)
+    complete = ann[ann["complete"]]
+    base = complete.loc[flow.BASELINE[0]:flow.BASELINE[1]]
+    clim = flow.climatology(s)
+    trends = flow.trend_table(s)
+    trends["reading"] = [flow.trend_reading(t) for t in trends.to_dict("records")]
+    return {"annual": complete, "base": base, "area": flow.SEGMENTS[key]["area_km2"], "clim": clim,
+            "trends": trends, "depend": flow.dependable(base["volume_mcm"]),
+            "monsoon_share": float(clim.loc[6:9, "share_pct"].sum())}
+
+
+@st.cache_data(ttl=3600, max_entries=8, show_spinner=False)
+def cached_flow_forecast(river_id):
+    return flow.fetch_forecast(river_id)
+
+
+def annual_flow_chart(annual, key):
+    d = annual.reset_index()
+    return (alt.Chart(d).mark_bar(color=FLOW_COLORS[key])
+            .encode(x=alt.X("year:O", title=None, axis=alt.Axis(labelOverlap=True, values=list(d["year"][::5]))),
+                    y=alt.Y("volume_mcm:Q", title="Water carried in the year (million m³)"),
+                    tooltip=[alt.Tooltip("year:O", title="Year"),
+                             alt.Tooltip("volume_mcm:Q", title="Volume (million m³)", format=".1f"),
+                             alt.Tooltip("mean_m3s:Q", title="Mean flow (m³/s)", format=".2f")])
+            .properties(height=300))
+
+
+def average_year_chart(clim, key):
+    d = clim.reset_index()
+    d["month_name"] = pd.to_datetime(d["month"], format="%m").dt.strftime("%b")
+    order = list(d["month_name"])
+    x = alt.X("month_name:O", sort=order, title=None)
+    band = (alt.Chart(d).mark_area(opacity=0.25, color=FLOW_COLORS[key])
+            .encode(x=x, y=alt.Y("p10_m3s:Q", title="Mean flow (m³/s)"), y2="p90_m3s:Q"))
+    line = (alt.Chart(d).mark_line(point=True, color=FLOW_COLORS[key])
+            .encode(x=x, y="mean_m3s:Q",
+                    tooltip=[alt.Tooltip("month_name:O", title="Month"),
+                             alt.Tooltip("mean_m3s:Q", title="Mean (m³/s)", format=".2f"),
+                             alt.Tooltip("p10_m3s:Q", title="Dry year, 10th pct", format=".2f"),
+                             alt.Tooltip("p90_m3s:Q", title="Wet year, 90th pct", format=".2f"),
+                             alt.Tooltip("share_pct:Q", title="Share of the year's water (%)", format=".1f")]))
+    return (band + line).properties(height=280)
+
+
+def forecast_chart(fc, key):
+    d = fc.reset_index()
+    band = (alt.Chart(d).mark_area(opacity=0.25, color=FLOW_COLORS[key])
+            .encode(x=alt.X("time:T", title=None), y=alt.Y("low:Q", title="Flow (m³/s)"), y2="high:Q"))
+    line = (alt.Chart(d).mark_line(color=FLOW_COLORS[key])
+            .encode(x="time:T", y="median:Q",
+                    tooltip=[alt.Tooltip("time:T", title="Time (IST)"),
+                             alt.Tooltip("median:Q", title="Median (m³/s)", format=".2f"),
+                             alt.Tooltip("low:Q", title="Low (m³/s)", format=".2f"),
+                             alt.Tooltip("high:Q", title="High (m³/s)", format=".2f")]))
+    return (band + line).properties(height=260)
+
+
+def width_chart(widths):
+    d = widths.copy()
+    d["reach_name"] = d["reach"].map(WIDTH_REACHES)
+    d["quality"] = np.where(d["reliable"], "reliable", "unreliable")
+    return (alt.Chart(d).mark_point(filled=True, size=70, opacity=0.85)
+            .encode(x=alt.X("date:T", title=None), y=alt.Y("width_m:Q", title="Open-water width (m)"),
+                    color=alt.Color("reach_name:N", title=None),
+                    tooltip=[alt.Tooltip("reach_name:N", title="Reach"), alt.Tooltip("date:T", title="Date"),
+                             alt.Tooltip("width_m:Q", title="Width (m)", format=".1f"),
+                             alt.Tooltip("period:N", title="Period"), alt.Tooltip("quality:N", title="Quality")])
+            .properties(height=300))
+
+
+def flow_headline(tab, segment):
+    base = tab["base"]
+    mean_volume = base["volume_mcm"].mean()
+    rows = [st.columns(2), st.columns(2)]
+    rows[0][0].metric("Yearly water (1991-2020 mean)", fmt(mean_volume, ".1f", " million m³"),
+                      help=f"Average of the complete years of the 30-year climate normal: "
+                           f"{fmt(flow.runoff_mm(mean_volume, tab['area']), '.0f', ' mm')} over the "
+                           f"{tab['area']:.0f} km² the model drains to this point.")
+    rows[0][1].metric("Mean flow", fmt(base["mean_m3s"].mean(), ".2f", " m³/s"),
+                      help="The median day is far lower: a few flood days carry much of the water.")
+    rows[1][0].metric("Dry-year water (90% dependable)", fmt(tab["depend"][90], ".1f", " million m³"),
+                      help="Matched or beaten in 9 years out of 10.")
+    rows[1][1].metric("Share in June-September", fmt(tab["monsoon_share"], ".0f", "%"),
+                      help="Share of the year's water that comes in the monsoon months.")
+    st.caption(f"{segment['name']}: GEOGLOWS segment {segment['id']}, contributing area {segment['area_km2']:.1f} km².")
+
+
+def tab_modelled_flow():
+    key = st.selectbox("Point on the river", flow.NAKATIYA_KEYS, index=flow.NAKATIYA_KEYS.index("mouth"),
+                       format_func=lambda k: f"{flow.SEGMENTS[k]['name']} (km {flow.SEGMENTS[k]['km']})",
+                       key="fw_segment", persist_state="session")
+    segment = flow.SEGMENTS[key]
+    tab = flow_tables(key)
+    flow_headline(tab, segment)
+    info = flow.snapshot_info()
+    st.subheader("Water carried each year")
+    st.altair_chart(annual_flow_chart(tab["annual"], key), width="stretch")
+    st.caption(f"Complete calendar years {tab['annual'].index[0]}-{tab['annual'].index[-1]}. The model's first "
+               f"two years ({flow.WARMUP_YEARS[0]}-{flow.WARMUP_YEARS[-1]}) are left out as a precaution. Snapshot "
+               f"retrieved {info['retrieved']}; last day {info['last']}.")
+    st.subheader("The average year")
+    st.altair_chart(average_year_chart(tab["clim"], key), width="stretch")
+    st.caption("Line: mean flow of each month over 1991-2020. Band: the month's 10th to 90th percentile across the "
+               "years, so a dry year sits near the bottom and a wet one near the top.")
+    st.subheader("Is the river changing?")
+    t = tab["trends"][["series", "period", "n", "pct_per_decade", "p_persist", "reading"]].rename(columns={
+        "series": "Series", "period": "Years", "n": "Years used", "pct_per_decade": "Change per decade (%)",
+        "p_persist": "p-value", "reading": "Reading"})
+    st.dataframe(t, hide_index=True, column_config={
+        "Change per decade (%)": st.column_config.NumberColumn(format="%+.1f"),
+        "p-value": st.column_config.NumberColumn(format="%.3f",
+                                                 help="After allowing for wet years following wet years.")})
+    st.caption("Theil-Sen slope and Mann-Kendall test, adjusted for year-to-year persistence. A rise in the "
+               "*modelled* dry-season flow since 1985 goes with falling ERA5 evaporative demand, not with more "
+               "rain, and this model cannot see built-up land, sewage or pumping: it cannot confirm or rule out "
+               "a construction effect on the real river.")
+    st.subheader("Next 15 days")
+    st.caption("The model's own ensemble forecast (51 weather runs). It carries the same limits as the history.")
+    if st.button("Load the 15-day forecast", key="fw_forecast_btn", icon=":material/cloud_download:"):
+        run_into("res_flow_forecast", (key,), "Fetching the GEOGLOWS forecast...", cached_flow_forecast, segment["id"])
+    entry = st.session_state.get("res_flow_forecast")
+    if entry and entry["params"] == (key,):
+        if "error" in entry:
+            st.error(entry["error"])
+        else:
+            fc = entry["result"]
+            st.altair_chart(forecast_chart(fc, key), width="stretch")
+            st.caption(f"Median and the range of the 51 ensemble members, {fc.index[0]:%d %b %H:%M} to "
+                       f"{fc.index[-1]:%d %b %H:%M} India Standard Time.")
+            download_csv(fc.reset_index(), f"river_forecast_{key}", "Forecast (CSV)")
+    elif entry:
+        st.info("The point on the river has changed: load the forecast again.", icon="🔁")
+    st.divider()
+    with st.container(horizontal=True):
+        if WORKBOOK.exists():
+            st.download_button("Historical flow workbook (Excel)", WORKBOOK.read_bytes(), file_name=WORKBOOK.name,
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="fw_workbook", on_click="ignore", icon=":material/table_view:")
+        download_csv(tab["annual"].reset_index(), f"river_flow_{key}_annual", "Yearly table (CSV)")
+    show_method("Daily flows are the GEOGLOWS v2 retrospective run: ECMWF ERA5 runoff routed down the TDX-Hydro river "
+                "network, from 1940. The public flows are **not bias-corrected**. Volume = flow × 86,400 s per day, "
+                "summed. Complete years only. The 7-day low is the lowest 7-day mean flow of the year.")
+
+
+def tab_widths():
+    st.caption("Open-water width of three reaches on clear Sentinel-2 dates, 2018-2025, found by splitting each "
+               "10 m pixel into water and land (sub-pixel unmixing). Width is **not** flow: it tells you when the "
+               "channel is wide or narrow, while depth and speed stay unknown.")
+    widths = flow.load_widths()
+    only = st.toggle("Only reliable dates", value=True, key="fw_reliable", persist_state="session",
+                     help="Unreliable dates borrowed the water signature of another date or were contaminated.")
+    shown = widths[widths["reliable"]] if only else widths
+    st.altair_chart(width_chart(shown), width="stretch")
+    summary = (widths[widths["reliable"]].assign(reach=lambda d: d["reach"].map(WIDTH_REACHES))
+               .groupby("reach").agg(dates=("date", "size"), median_width_m=("width_m", "median"),
+                                     narrowest_m=("width_m", "min"), widest_m=("width_m", "max")).reset_index())
+    summary.columns = ["Reach", "Reliable dates", "Median width (m)", "Narrowest (m)", "Widest (m)"]
+    st.dataframe(summary, hide_index=True, column_config={
+        c: st.column_config.NumberColumn(format="%.1f") for c in summary.columns[2:]})
+    with st.expander(f"All dates shown ({len(shown)})"):
+        st.dataframe(shown.drop(columns=["scene"]), hide_index=True)
+    download_csv(widths, "river_open_water_width", "Widths (CSV)")
+    st.warning("Widths carry about ±0.5 m of noise, and most reaches are only a few pixels wide. The upper reach "
+               "changes with crops and weeds as much as with water. Read the pattern between seasons, not a single "
+               "date.", icon=":material/straighten:")
+
+
+def field_reading_form():
+    """The float-method form: (submitted, the values typed)."""
+    with st.form("fw_form", clear_on_submit=False):
+        c1, c2 = st.columns(2)
+        when = c1.date_input("Date", value=date.today(), max_value=date.today(), key="fw_date")
+        site = c2.text_input("Site", placeholder="for example: bridge at Bhojipura", key="fw_site")
+        c1, c2 = st.columns(2)
+        width = c1.number_input("Water width (m)", 0.0, 500.0, 0.0, 0.1, key="fw_width",
+                                help="Edge of the water to edge of the water.")
+        distance = c2.number_input("Float distance (m)", 0.0, 500.0, 10.0, 0.5, key="fw_distance",
+                                   help="Length of the straight stretch the float travels.")
+        depths = st.text_input("Depths across the river (m), evenly spaced", placeholder="0.3, 0.5, 0.6, 0.4",
+                               key="fw_depths", help="Measure at equal spacing from bank to bank, leaving out the "
+                                                     "two banks themselves.")
+        times = st.text_input("Float times (s), one per run", placeholder="14, 15, 13", key="fw_times",
+                              help="Time for a float (an orange or a stick) to cover the distance. Three runs or more.")
+        coefficient = st.slider("Surface-to-average coefficient", 0.8, 0.9, flow.FLOAT_COEFFICIENT, 0.01,
+                                key="fw_coeff", help="0.8 for a rough, shallow bed; 0.9 for a smooth, deep one.")
+        c1, c2 = st.columns(2)
+        lat = c1.number_input("Latitude (optional)", 27.0, 30.0, None, 0.0001, format="%.5f", key="fw_lat")
+        lon = c2.number_input("Longitude (optional)", 77.0, 81.0, None, 0.0001, format="%.5f", key="fw_lon")
+        note = st.text_input("Note (optional)", placeholder="water colour, smell, weeds, who measured", key="fw_note")
+        submitted = st.form_submit_button("Work out the flow", type="primary", icon=":material/calculate:")
+    return submitted, (when, site, width, depths, distance, times, coefficient, lat, lon, note)
+
+
+def tab_field_readings():
+    st.caption("Enter a float-method measurement and get the river's flow. A field reading is the only real "
+               "measurement of the Nakatiya's flow this project can gather: a handful across the seasons would "
+               "test the model. Readings live in this browser session only: download the CSV to keep them.")
+    st.markdown("**Float method.** Measure the width, the depths across the river and how long a float takes to "
+                "drift a known distance. Area × surface speed × about 0.85 gives the flow.")
+    submitted, values = field_reading_form()
+    log = st.session_state.setdefault("fw_log", [])
+    if submitted:
+        when, site, width, depths, distance, times, coefficient, lat, lon, note = values
+        try:
+            row = flow.field_reading(when, site or "unnamed site", width, flow.parse_numbers(depths), distance,
+                                     flow.parse_numbers(times), coefficient, lat, lon, note)
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            log.append(row)
+            st.success(f"Flow {row['discharge_m3s']:.3f} m³/s ({row['discharge_low_m3s']:.3f} to "
+                       f"{row['discharge_high_m3s']:.3f} for coefficients 0.8 to 0.9), about "
+                       f"{row['discharge_mld']:.1f} million litres a day. Cross-section {row['area_m2']:.2f} m², "
+                       f"surface speed {row['surface_velocity_ms']:.2f} m/s.", icon="✅")
+    if log:
+        df = pd.DataFrame(log, columns=flow.FIELD_COLUMNS)
+        st.subheader(f"Readings this session ({len(df)})")
+        st.dataframe(df[["date", "site", "width_m", "area_m2", "surface_velocity_ms", "discharge_m3s",
+                         "discharge_low_m3s", "discharge_high_m3s", "note"]], hide_index=True)
+        with st.container(horizontal=True):
+            download_csv(df, "river_field_log", "Field log (CSV)")
+            if st.button("Clear the log", icon=":material/delete:", key="fw_clear"):
+                st.session_state["fw_log"] = []
+                st.rerun()
+    up = st.file_uploader("Add readings from a saved field log (CSV)", type="csv", key="fw_upload")
+    if up is not None and st.button("Add these readings", key="fw_add_upload", icon=":material/upload:"):
+        try:
+            rows = flow.read_field_log(up).to_dict("records")
+        except (ValueError, KeyError, pd.errors.ParserError) as exc:
+            st.error(f"Could not read this file: {exc}")
+        else:
+            st.session_state["fw_log"] = log + rows
+            st.rerun()
+    show_method("Cross-section: depths at equal spacing, joined to zero at both banks (trapezoid rule). Surface speed: "
+                "float distance over the mean of the timed runs. Flow = area × surface speed × coefficient. The "
+                "range shown changes only the coefficient (0.8 and 0.9): it does not cover a bad cross-section, "
+                "wind on the float, or a river that changes between runs. Uploaded rows are recomputed from their "
+                "raw readings.")
+
+
+def tab_flow_checks():
+    st.markdown("**Check against the gauged neighbour.** The Ramganga at Chaubari (Bareilly) has a Central Water "
+                "Commission gauge. WWF-India and INRM built a hydrological model calibrated to it. Comparing "
+                "GEOGLOWS with that model over 1973-2011 shows how far the global model can be trusted in this "
+                "river basin.")
+    check = flow.chaubari_check(flow_series()["ramganga"])
+    show = check[["season", "months", "met_in_pct_of_years", "geoglows_m3s", "swat_present_m3s", "swat_natural_m3s",
+                  "ratio_to_present"]].rename(columns={
+        "season": "Season", "months": "Months", "met_in_pct_of_years": "Met in % of years",
+        "geoglows_m3s": "GEOGLOWS (m³/s)", "swat_present_m3s": "WWF model, today (m³/s)",
+        "swat_natural_m3s": "WWF model, no dams or farming (m³/s)", "ratio_to_present": "GEOGLOWS ÷ today"})
+    st.dataframe(show, hide_index=True, column_config={
+        c: st.column_config.NumberColumn(format="%.2f") for c in show.columns[3:]})
+    st.caption("The model runs roughly twice the gauge-calibrated river in the monsoon and up to three times in the "
+               "pre-monsoon. That gap is irrigation, canals and dams that the global model ignores, and it differs "
+               "by season, so **never scale the Nakatiya's flows by one factor**.")
+    st.subheader("What this page cannot tell you")
+    st.markdown(bullets([
+        "No gauge has ever measured the Nakatiya. Every flow here is modelled; only a field reading is a measurement.",
+        "The model has no city, no sewage, no irrigation, no canals and no aquifer: it cannot show the effect of "
+        "riparian construction on seepage and runoff, the question this project wants to answer.",
+        "The Nakatiya's model stream starts about 25-30 km below the mapped head, and a 371 km² catchment is small "
+        "for a 0.1° weather grid.",
+        "GEOGLOWS flows are not bias-corrected. The 30-year climate normal is 1991-2020; the first two model "
+        "years are left out.",
+        "Open-water width from Sentinel-2 is a hint about the channel, not a flow.",
+        "A machine-learning forecast trained on these flows would copy the model, not the river. It needs measured "
+        "flows first."]))
+    st.info("Nothing on this page is a legal, engineering or flood-warning determination. Where a number matters, "
+            "measure it.", icon=":material/info:")
+
+
+def page_river_flow(ctx):
+    st.header(PAGES["river-flow"], divider="blue")
+    st.caption("How much water the Nakatiya carries, through the year and over the decades: modelled flows, "
+               "what the satellites see of the channel, and a form for your own field readings.")
+    st.warning(FLOW_BANNER, icon=":material/water_drop:")
+    tabs = st.tabs(["Modelled flow", "Satellite width", "Field readings", "Check and limits"], key="fw_tab",
+                   on_change="rerun")
+    if tabs[0].open:
+        with tabs[0]:
+            tab_modelled_flow()
+    if tabs[1].open:
+        with tabs[1]:
+            tab_widths()
+    if tabs[2].open:
+        with tabs[2]:
+            tab_field_readings()
+    if tabs[3].open:
+        with tabs[3]:
+            tab_flow_checks()
+
+
 PAGE_FUNCS = {"overview": page_overview, "change-radar": page_radar, "field-scanner": page_field,
               "water": page_water, "fusion": page_fusion, "scouting": page_scouting, "ask": page_ask,
-              "river": page_observatory, "land-change": page_land_change}
+              "river": page_observatory, "land-change": page_land_change, "river-flow": page_river_flow}
 
 
 # ------------------------------------------------------------------------------------------ sidebar

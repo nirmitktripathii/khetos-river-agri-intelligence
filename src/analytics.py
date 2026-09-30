@@ -26,7 +26,8 @@ def field_scan(bbox, geometry=None, months=6, max_cloud_pct=35):
     """Latest clear Sentinel-2 scene over an area (or a drawn field inside it) and the clear scene before it.
 
     Returns the metrics of both scenes over clear cropland (see eo.scene_metrics) and, for the map, NDVI, NDMI and
-    NDVI change on the scene grid with every pixel that is not clear set to NaN.
+    NDVI change on the scene grid with every pixel that is not clear set to NaN. `skipped` lists newer scenes that
+    could not be read (see eo.skip_record).
     """
     scene = latest_clear_s2(bbox, geometry=geometry, months=months, max_cloud_pct=max_cloud_pct)
     prev = previous_clear_s2(scene, bbox, max_cloud_pct)
@@ -40,7 +41,7 @@ def field_scan(bbox, geometry=None, months=6, max_cloud_pct=35):
             "previous": scene_metrics(prev, crop) if prev is not None else None,
             "ndvi": masked(scene.ndvi, scene.clear), "ndmi": masked(scene.ndmi, scene.clear),
             "ndvi_change": masked(scene.ndvi - prev.ndvi, scene.clear & prev.clear) if prev is not None else None,
-            "grid": scene.grid, "cropland_year": crop_year}
+            "grid": scene.grid, "cropland_year": crop_year, "skipped": scene.skipped}
 
 
 def radar_pair(bbox):
@@ -240,7 +241,8 @@ def make_scouting_grid(bbox, months=6, max_cloud_pct=35, cell_m=400, max_cells_s
     return {"table": df, "geojson": features_fc, "scene": scene.id, "date": scene.date.isoformat(),
             "previous_scene": prev.id if prev is not None else None,
             "previous_date": prev.date.isoformat() if prev is not None else None,
-            "cell_m": cell, "model": model, "cropland_source": f"Impact Observatory 10 m land cover {crop_year}"
+            "cell_m": cell, "model": model, "skipped": scene.skipped,
+            "cropland_source": f"Impact Observatory 10 m land cover {crop_year}"
             if crop is not None else "unavailable (all cells treated as eligible)"}
 
 

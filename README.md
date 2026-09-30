@@ -13,6 +13,7 @@ A Streamlit-first, free/open-source proof of concept for Bareilly and the wider 
 * 🤖 Ask the Map
 * 🌊 Nakatiya River Observatory
 * 🏘 Land Change / Riparian Change
+* 📈 River Water Watch (modelled flow since 1940, satellite width, field readings)
 * 📄 Evidence report export
 
 ## Live data sources
@@ -31,8 +32,9 @@ A Streamlit-first, free/open-source proof of concept for Bareilly and the wider 
    * default Nakatiya/Naktia river geometry retrieval.
 4. **JRC Global Surface Water**: historic water transitions (Planetary Computer).
 5. **World Settlement Footprint Evolution (DLR)** and **Impact Observatory 10 m land cover**: validated built-up change, 1985-2015 and 2017-2025.
+6. **GEOGLOWS v2** (CC BY 4.0): modelled daily river flow from 1940 and a 15-day forecast. A snapshot is bundled in `data/`; the forecast is fetched live. Modelled, not measured.
 
-See `docs/AUDIT.md` for the requirements audit and calibration evidence, and `docs/SOLUTION_DESIGN.md` for the design and roadmap.
+See `docs/USER_GUIDE.md` for a plain-language guide to every module (data, formulas, thresholds and a worked run), `docs/AUDIT.md` for the requirements audit and calibration evidence, and `docs/SOLUTION_DESIGN.md` for the design and roadmap.
 
 ## Important scientific limitation
 

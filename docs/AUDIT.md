@@ -35,6 +35,15 @@ Every page and every Ask-the-Map action was run end to end on live data. The off
 - **Sentinel-2 offset.** Processing baseline 04.00 and later carries a −1000 DN offset. Without the fix, NDVI and NDMI after January 2022 were biased. It is now applied per item (`s2_boa_offset`).
 - **Landsat sensor mixing.** TM and ETM+ are now mapped onto OLI with the Roy et al. (2016) coefficients, and Landsat 7 SLC-off scenes are ranked last.
 - **One bad scene sank a whole analysis.** Per-scene readers are now wrapped in `eo._safe`. A transient `RasterioIOError` was reproduced during calibration.
+- **Sentinel-2 reads failed under load, and the gaps were silent.** Three concurrent processes (30 Sep 2026) lost 115 of 176 band reads with "Read failed". The cause was curl's "Operation timed out after 30000 ms": `GDAL_HTTP_TIMEOUT` caps the whole transfer, so under shared bandwidth a COG range read was cut off at 30 s and returned a truncated 206. GDAL never retries multi-range reads, and it can cache the short response under the same URL. No 403, 409, 429 or 503 responses were seen. The fix, in `src/eo.py`:
+  - The total timeout is now 300 s. The low-speed abort still catches transfers that have truly stalled.
+  - Each remote read gets up to 4 whole attempts, with jittered backoff of 2 s, 6 s and 18 s. Every retry uses a new URL (`khetos_retry=N`), so GDAL's cache cannot hand back the truncated copy. A 404 or a processing error is not retried.
+  - A SAS token that was refused, or that expires within 5 minutes, is signed again. The cached token is evicted when needed.
+  - Remote reads per process are capped at 8 (`KHETOS_MAX_REMOTE_READS`).
+  - The last GDAL/curl messages are captured, and each failure is classified as throttled, expired, truncated, timeout and so on. The error surfaces as a `ReadError` with SAS fragments removed.
+  - Scenes that still cannot be read are counted, not hidden. Each page shows a warning and an "Unread scenes" table. Reports carry `skipped_scenes` and `skipped_reasons`, and river caveats name the affected seasons. A result with gaps is not cached, so the next run tries those scenes again.
+  - Tests: `tests/test_read_retry.py`.
+  - Re-run of the same 3-process test after the fix: every band read succeeded (60 of 60 months, 180 reads), with 0 failed attempts and 0 retries. Each process took 869–928 s, against 433–489 s before, because reads now finish instead of being cut off. The retry path was not needed in this run and is covered by the offline tests.
 - **Single-season Landsat noise was raising false flags.** Comparisons now use the median of up to 3 seasons at each end, need at least 2 peak scenes, and flag vegetation only at 15 pp or more (§3).
 - **UI:**
   - the page radio did not honour query parameters;
@@ -75,7 +84,7 @@ Built-up and water flags trigger at 3 pp or more. The long-run vegetation trend 
 
 - Buffers are measured from the OSM centreline, not from surveyed banks.
 - Impact Observatory stops at 2025 and WSF at 2015, so 2015→2017 and 2025→now are reported as uncovered gaps.
-- GDAL "Request … failed with response_code=206" is a short multi-range read that GDAL retries. It is benign.
+- GDAL "Request … failed with response_code=206" means a range read came back short. GDAL does not retry multi-range reads, so KhetOS retries the whole read (§2). The message is benign only when no "Unread scenes" warning follows it.
 - The "'Memory' driver is deprecated since GDAL 3.11" message comes from inside `rasterio.features.shapes`. It is benign.
 
 ## 6. Dead code (flagged, not deleted)

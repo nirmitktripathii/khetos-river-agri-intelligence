@@ -26,7 +26,7 @@ from src.config import DATA_DIR, NAKATIYA_CONFLUENCE, OVERPASS_URLS, REGION_BBOX
 from src.eo import (LANDSAT_FIRST_YEAR, LULC_YEARS, WSF_YEARS, built_extent_on_grid, composite_shares,
                     geometry_pixels, jrc_water_summary, landsat_season_composite, landsat_season_composite_metrics,
                     latest_rabi_year, latest_s1_pair, lulc_fractions, lulc_on_grid, make_grid, run_jobs,
-                    s1_scene_metrics, s2_window_greenest, settlement_shares, wsf_evolution_on_grid)
+                    s1_scene_metrics, s2_window_greenest, settlement_shares, skip_note, wsf_evolution_on_grid)
 
 log = logging.getLogger(__name__)
 
@@ -267,7 +267,23 @@ def _season_caveats(seasons):
             for y, m in sorted(seasons.items()) if m and not _usable(m)]
     failed = [str(y) for y, m in sorted(seasons.items()) if not m]
     return ([f"Landsat seasons left out of the medians: {', '.join(left)}"] if left else []) + \
-           ([f"Landsat seasons that could not be composited: {', '.join(failed)}"] if failed else [])
+           ([f"Landsat seasons that could not be composited: {', '.join(failed)}"] if failed else []) + \
+           _unread_caveat([m for m in seasons.values() if m])
+
+
+def _unread_caveat(summaries):
+    """A caveat naming the Landsat scenes that could not be read, from composite_shares summaries."""
+    lost = [f"{m['year']}: {m['skipped_scenes']} ({m['skipped_reasons']})"
+            for m in sorted(summaries, key=lambda m: m["year"]) if m.get("skipped_scenes")]
+    return ([f"Landsat scenes that could not be read were left out of these seasons: {'; '.join(lost)}. The "
+             "seasons rest on the scenes that were read; run the analysis again later to try the missing ones"]
+            if lost else [])
+
+
+def _looks_caveats(now, ref, window, reference_window):
+    """Caveats for Sentinel-2 scenes that could not be read in either window of _greenest_pair."""
+    return [f"{label}: {note}" for label, r in ((window, now), (reference_window, ref))
+            if (note := skip_note(r.get("skipped")))]
 
 
 def _season_table(seasons, set_a, year_a, year_b):
@@ -475,6 +491,7 @@ def river_timeline(point, radius_km=4, buffer_m=100, years=None, river=None, pro
         if left:
             caveats.append(f"Landsat seasons left out of the trend (rated poor or under two clear peak-season "
                            f"scenes): {', '.join(left)}")
+        caveats += _unread_caveat(rows)
     return {"landsat": landsat, "builtup": pd.DataFrame(builtup, columns=["year", "built_pct", "source"]),
             "landcover": pd.DataFrame(lulc), "trend": vegetation_trend(landsat), "missing": missing,
             "caveats": caveats, "corridor": corridor, "buffer_m": buffer_m, "radius_km": radius_km,
@@ -598,7 +615,10 @@ def riparian_health(point=None, radius_km=None, buffer_m=100, river=None, year=N
     compared = round(100 * n_both / max(int(aoi.sum()), 1), 1)
     flag = ("TOO FEW CLEAR LOOKS" if compared < 50 else "GREENNESS DECLINE" if d_veg <= -RIPARIAN_THRESHOLD_PP
             else "GREENING" if d_veg >= RIPARIAN_THRESHOLD_PP else "STABLE")
-    return {"year": year, "window": f"1 Jan to 31 Mar {year}", "reference_window": f"1 Jan to 31 Mar {year - 1}",
+    window, reference_window = f"1 Jan to 31 Mar {year}", f"1 Jan to 31 Mar {year - 1}"
+    return {"year": year, "window": window, "reference_window": reference_window,
+            "caveats": _looks_caveats(now, ref, window, reference_window),
+            "skipped_now": len(now["skipped"]), "skipped_reference": len(ref["skipped"]),
             "looks_now": len(now["dates"]), "looks_reference": len(ref["dates"]), "compared_pct": compared,
             "vegetated_now_pct": veg_now, "vegetated_year_ago_pct": veg_ref, "vegetated_change_pp": d_veg,
             "median_ndvi_change": round(_nanmedian(now["ndvi_max"][both]) - _nanmedian(ref["ndvi_max"][both]), 3),
@@ -610,8 +630,8 @@ def riparian_health(point=None, radius_km=None, buffer_m=100, river=None, year=N
             "method": (f"Per-pixel greenest Sentinel-2 NDVI over 1 January-31 March of {year} and {year - 1}, "
                        f"cloud-masked with the scene classification. Vegetated = greenest NDVI >= {GREEN_NDVI}, "
                        f"compared on pixels clear in both windows; flagged beyond ±{RIPARIAN_THRESHOLD_PP:.0f} "
-                       "points. Matched Jan-Mar windows moved at most 5 points year on year on two reaches, matched "
-                       "Apr-Sep windows 7-19 points, so no other season is compared.")}
+                       "points. Matched Jan-Mar windows moved at most 4 points year on year on two reaches, matched "
+                       "Apr-Sep windows 7-18 points, so no other season is compared.")}
 
 
 def construction_alerts(point=None, radius_km=None, buffer_m=100, window_days=90, river=None, end=None,
@@ -654,8 +674,10 @@ def construction_alerts(point=None, radius_km=None, buffer_m=100, window_days=90
     if seen_pct < 50:
         caveats.append(f"Only {seen_pct}% of the corridor had two or more clear looks in the latest window")
     both = aoi & (now["n_obs"] >= 1) & (ref["n_obs"] >= 1)
-    return {"window": f"{start:%d %b %Y} to {end:%d %b %Y}",
-            "reference_window": f"{ref_start:%d %b %Y} to {ref_end:%d %b %Y}",
+    window, reference_window = f"{start:%d %b %Y} to {end:%d %b %Y}", f"{ref_start:%d %b %Y} to {ref_end:%d %b %Y}"
+    caveats += _looks_caveats(now, ref, window, reference_window)
+    return {"window": window, "reference_window": reference_window,
+            "skipped_now": len(now["skipped"]), "skipped_reference": len(ref["skipped"]),
             "looks_now": len(now["dates"]), "looks_reference": len(ref["dates"]), "seen_pct": seen_pct,
             "lost_green_ha": round(float((lost & ~wet).sum()) * px_ha, 2),
             "new_wet_ha": round(float(wet.sum()) * px_ha, 2),

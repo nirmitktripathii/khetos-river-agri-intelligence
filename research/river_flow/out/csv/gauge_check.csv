@@ -1,0 +1,9 @@
+season,months,met_in_pct_of_years,geoglows_m3s,swat_present_m3s,swat_natural_m3s,ratio_to_present,ratio_to_natural
+monsoon,Jun-Sep,25,1112.01,513.87,1436.93,2.16399,0.773878
+monsoon,Jun-Sep,50,788.28,412.3,1297.53,1.91191,0.607523
+monsoon,Jun-Sep,75,649.403,318.46,1082.43,2.0392,0.599949
+monsoon,Jun-Sep,90,535.764,242.06,853,2.21335,0.628094
+pre-monsoon,Mar-May,25,67.2639,46.54,424.9,1.44529,0.158305
+pre-monsoon,Mar-May,50,50.6154,31.5,372.37,1.60684,0.135928
+pre-monsoon,Mar-May,75,45.4634,15.4,341.9,2.95217,0.132973
+pre-monsoon,Mar-May,90,29.0429,10.99,331.93,2.64267,0.0874972

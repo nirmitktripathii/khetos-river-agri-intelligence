@@ -1,0 +1,4 @@
+year,thesis_cn2,thesis_rain_mm,thesis_runoff_mm,thesis_recharge_mm,era5_rain_mm,era5_south_rain_mm,era5_runoff_own_cn_mm,era5_runoff_cn1979_mm,era5_runoff_cn2009_mm
+1979,75.63,489.27,12.69,29.26,708.53,592.6,43.0823,43.0823,52.4236
+1990,76.65,1023.5,123.74,167.21,1405.85,1261.5,234.321,225.88,249.792
+2009,78.4,1040.1,221.91,151.13,989.75,921.3,161.475,141.015,161.475
