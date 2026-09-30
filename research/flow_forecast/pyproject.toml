@@ -1,0 +1,18 @@
+[project]
+name = "khetos-flow-forecast"
+version = "0.1.0"
+description = "Flow-forecast scaffold for the Nakatiya (separate from the KhetOS app, which stays free of heavy dependencies)"
+requires-python = ">=3.11"
+dependencies = ["numpy", "pandas", "scikit-learn", "scipy"]
+
+[project.optional-dependencies]
+# CPU-only PyTorch for the LSTM and transformer. Large download (a few hundred MB); install only when wanted:
+#   uv sync --extra nn
+nn = ["torch"]
+dev = ["pytest"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
