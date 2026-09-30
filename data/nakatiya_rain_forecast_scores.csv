@@ -1,0 +1,10 @@
+horizon_days,model,test_days,NSE,logNSE,KGE,PBIAS_%,NSE_monsoon,coverage_10_90
+1,honest (no future rain),936,0.6780,0.9412,0.6974,-14.5290,0.6157,0.8109
+1,ECMWF rain forecast,936,0.7986,0.9468,0.7755,-9.3802,0.7602,0.7212
+1,BEST CASE (rain that fell),936,0.8638,0.9827,0.8519,-7.9229,0.8379,0.7788
+3,honest (no future rain),934,0.3009,0.7941,0.2530,-33.6997,0.1606,0.7891
+3,ECMWF rain forecast,934,0.5883,0.8446,0.7544,-2.3089,0.5060,0.6328
+3,BEST CASE (rain that fell),934,0.8666,0.9634,0.8819,-8.7152,0.8403,0.7430
+7,honest (no future rain),921,0.2141,0.7201,0.1256,-40.3520,0.0451,0.8024
+7,ECMWF rain forecast,921,0.2488,0.7153,0.5231,1.6386,0.0877,0.6200
+7,BEST CASE (rain that fell),921,0.8686,0.9566,0.7531,-14.2756,0.8411,0.7362

@@ -1441,6 +1441,7 @@ def tab_modelled_flow():
             download_csv(fc.reset_index(), f"river_forecast_{key}", "Forecast (CSV)")
     elif entry:
         st.info("The point on the river has changed: load the forecast again.", icon="🔁")
+    rain_forecast_section(key)
     st.divider()
     with st.container(horizontal=True):
         if WORKBOOK.exists():
@@ -1451,6 +1452,69 @@ def tab_modelled_flow():
     show_method("Daily flows are the GEOGLOWS v2 retrospective run: ECMWF ERA5 runoff routed down the TDX-Hydro river "
                 "network, from 1940. The public flows are **not bias-corrected**. Volume = flow × 86,400 s per day, "
                 "summed. Complete years only. The 7-day low is the lowest 7-day mean flow of the year.")
+
+
+RAIN_MODEL_NAMES = {"honest (no future rain)": "Without a rain forecast",
+                    "ECMWF rain forecast": "With the ECMWF rain forecast",
+                    "BEST CASE (rain that fell)": "Ceiling: the rain that actually fell"}
+
+
+def rain_hindcast_chart(d):
+    long = d.melt(id_vars=["target_date", "forecast_low_m3s", "forecast_high_m3s"],
+                  value_vars=["geoglows_m3s", "forecast_m3s", "no_rain_forecast_m3s"], var_name="series",
+                  value_name="flow")
+    long["series"] = long["series"].map({"geoglows_m3s": "GEOGLOWS model",
+                                         "forecast_m3s": "With rain forecast",
+                                         "no_rain_forecast_m3s": "Without rain forecast"})
+    band = (alt.Chart(d).mark_area(opacity=0.2, color=FLOW_COLORS["mouth"])
+            .encode(x=alt.X("target_date:T", title=None), y=alt.Y("forecast_low_m3s:Q", title="Flow (m³/s)"),
+                    y2="forecast_high_m3s:Q"))
+    lines = (alt.Chart(long).mark_line(strokeWidth=1.4)
+             .encode(x="target_date:T", y="flow:Q",
+                     color=alt.Color("series:N", title=None, legend=alt.Legend(orient="bottom"),
+                                     scale=alt.Scale(range=["#444444", FLOW_COLORS["mouth"], "#d08a2c"])),
+                     strokeDash=alt.StrokeDash("series:N", legend=None,
+                                               scale=alt.Scale(range=[[1, 0], [1, 0], [4, 3]])),
+                     tooltip=[alt.Tooltip("target_date:T", title="Day"), alt.Tooltip("series:N", title="Series"),
+                              alt.Tooltip("flow:Q", title="Flow (m³/s)", format=".2f")]))
+    return (band + lines).properties(height=300)
+
+
+def rain_forecast_section(key):
+    st.subheader("Our rain-forecast model (experimental)")
+    if key != "mouth":
+        st.caption("Built for the whole river (the point at the Ramganga) only: choose that point above to see it.")
+        return
+    st.caption("A machine-learning model (gradient-boosted trees) that forecasts the flow 1, 3 or 7 days ahead "
+               "from the last 90 days of flow, rain, evaporation and soil moisture, plus the rain the ECMWF "
+               "(European Centre for Medium-Range Weather Forecasts) forecast for the days ahead. It learned from "
+               "1942-2023 and was then tested on days it never saw, from March 2024, using the rain forecasts as "
+               "they were actually issued.")
+    hind, scores = flow.load_rain_hindcast(), flow.load_rain_scores()
+    horizon = st.segmented_control("Days ahead", [1, 3, 7], default=3, key="fw_rain_h", persist_state="session",
+                                   format_func=lambda h: f"{h} day{'s' if h > 1 else ''}") or 3
+    d = hind[hind["horizon_days"] == horizon]
+    years = sorted(d["target_date"].dt.year.unique())
+    year = st.pills("Year", years, default=years[-2] if len(years) > 1 else years[-1], key="fw_rain_year",
+                    persist_state="session") or years[-1]
+    st.altair_chart(rain_hindcast_chart(d[d["target_date"].dt.year == year]), width="stretch")
+    st.caption("Each point is the forecast made that many days earlier for that day. Shaded: the model's 10-90 % "
+               "band with the rain forecast.")
+    s = scores[scores["horizon_days"] == horizon].assign(model=lambda t: t["model"].map(RAIN_MODEL_NAMES))
+    s = s[["model", "NSE", "NSE_monsoon", "PBIAS_%", "coverage_10_90"]].rename(columns={
+        "model": "Model", "NSE": "Score, all days", "NSE_monsoon": "Score, June-September",
+        "PBIAS_%": "Water bias (%)", "coverage_10_90": "Days inside the 10-90 % band"})
+    st.dataframe(s, hide_index=True, column_config={
+        "Score, all days": st.column_config.NumberColumn(format="%.2f", help=(
+            "Nash-Sutcliffe efficiency: 1 is perfect, 0 is no better than the average flow.")),
+        "Score, June-September": st.column_config.NumberColumn(format="%.2f"),
+        "Water bias (%)": st.column_config.NumberColumn(format="%+.0f", help="Negative: too little water."),
+        "Days inside the 10-90 % band": st.column_config.NumberColumn(format="percent", help="Should be near 80 %.")})
+    st.warning("Judged against GEOGLOWS, not the river: this shows a rain forecast sharpens a 1-3 day forecast, not "
+               "how well the real Nakatiya can be predicted. The band is too narrow (fewer than 80 % of days fall "
+               "inside it). Only about two and a half monsoons are in the test. It is not run live, because the "
+               "flow and weather it starts from arrive about a week late.", icon="🧪")
+    download_csv(d, f"river_rain_forecast_test_{horizon}d", "Test forecasts (CSV)")
 
 
 def tab_widths():

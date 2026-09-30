@@ -16,3 +16,5 @@ def test_river_water_watch_page_renders():
     metrics = {m.label: m.value for m in at.metric}
     assert metrics["Yearly water (1991-2020 mean)"].startswith("113.")
     assert any("Modelled, not measured" in w.value for w in at.warning)
+    assert "Our rain-forecast model (experimental)" in [h.value for h in at.subheader]
+    assert any("Judged against GEOGLOWS" in w.value for w in at.warning)

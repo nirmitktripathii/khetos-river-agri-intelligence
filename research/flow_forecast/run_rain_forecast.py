@@ -24,6 +24,9 @@ from forecast import data, features, gbm, metrics  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 FORECAST_FILE = HERE / "inputs" / "ecmwf_rain_forecast_daily.csv.gz"
+APP_DATA = HERE.parents[1] / "data"
+HINDCAST_FILE = APP_DATA / "nakatiya_rain_forecast_hindcast.csv"  # read by the River Water Watch page
+SCORES_FILE = APP_DATA / "nakatiya_rain_forecast_scores.csv"
 HONEST = ("base", "wetness", "soil", "upstream")
 HORIZONS = (1, 3, 7)
 TRAIN_END = "2023-11-30"  # 90-day gap before the first forecast day
@@ -42,7 +45,7 @@ def forecast_future_rain(fc, horizon):
 def main():
     df = data.load("mouth")
     fc = pd.read_csv(FORECAST_FILE, index_col=0, parse_dates=True)
-    rows = []
+    rows, hind = [], []
     for h in HORIZONS:
         Xh, y = features.build(df, h, HONEST)
         Xb, yb = features.build(df, h, HONEST + ("future_rain",))
@@ -59,6 +62,10 @@ def main():
         Xf[fut.columns] = fut.loc[test]
         forecast = gbm.predict(m_best, Xf)
 
+        hind.append(pd.DataFrame({
+            "target_date": test.shift(h, freq="D"), "origin_date": test, "horizon_days": h,
+            "geoglows_m3s": obs, "forecast_m3s": np.expm1(forecast[:, 1]), "forecast_low_m3s": np.expm1(forecast[:, 0]),
+            "forecast_high_m3s": np.expm1(forecast[:, 2]), "no_rain_forecast_m3s": np.expm1(honest[:, 1])}))
         for name, band in (("honest (no future rain)", honest), ("ECMWF rain forecast", forecast),
                            ("BEST CASE (rain that fell)", best)):
             sim = np.expm1(band[:, 1])
@@ -68,6 +75,9 @@ def main():
     table = pd.DataFrame(rows)
     (HERE / "out").mkdir(exist_ok=True)
     table.to_csv(HERE / "out" / "rain_forecast_mouth.csv", index=False)
+    pd.concat(hind).to_csv(HINDCAST_FILE, index=False, float_format="%.4f", date_format="%Y-%m-%d",
+                           lineterminator="\n")
+    table.to_csv(SCORES_FILE, index=False, float_format="%.4f", lineterminator="\n")
     with pd.option_context("display.width", 160, "display.float_format", "{:.3f}".format):
         print(table.to_string(index=False))
 

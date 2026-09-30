@@ -750,7 +750,8 @@ This page uses the same machinery as tab A, arranged to answer two further quest
    - the **Mann–Kendall p-value**, adjusted for persistence (a wet year tends to follow a wet year, which makes plain tests find trends too easily);
    - a plain reading: **clear** (p under 0.01), **likely** (under 0.05), **weak sign** (under 0.1) or **no trend detected**.
 6. **Next 15 days**: a button loads GEOGLOWS's own ensemble forecast (51 weather runs) for the chosen point. It is fetched live, so it needs the GEOGLOWS service to be up, and an error is shown if it is not.
-7. **Downloads**: the full **historical workbook** (Excel, 21 sheets: annual, water-year, seasonal, monthly and daily tables, average year, dependable flows, flow-duration curves, trends, decades, rain and runoff, a land-cover scenario, satellite widths, checks, calculators and limits) and the yearly table as CSV.
+7. **Our rain-forecast model (experimental)**, whole river only: a machine-learning model (gradient-boosted trees) that forecasts the flow 1, 3 or 7 days ahead from recent flow, rain, evaporation and soil moisture plus the ECMWF rain forecast. It learned from 1942-2023 and is shown on March 2024 onward, days it never saw, with the rain forecasts as they were really issued. At 3 days its score rises from 0.30 without a rain forecast to 0.59 with one (Nash-Sutcliffe efficiency, 1 is perfect). It is judged against GEOGLOWS, not the river, and is not run live because its inputs arrive about a week late.
+8. **Downloads**: the full **historical workbook** (Excel, 21 sheets: annual, water-year, seasonal, monthly and daily tables, average year, dependable flows, flow-duration curves, trends, decades, rain and runoff, a land-cover scenario, satellite widths, checks, calculators and limits) and the yearly table as CSV.
 
 **Typical run (whole river):** about 113 million m³ in an average year, 72% of it in June–September, and about 51 million m³ in a dry year (9 in 10 dependable).
 

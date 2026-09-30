@@ -20,6 +20,8 @@ API = "https://geoglows.ecmwf.int/api/v2/"
 DAILY_FILE = DATA_DIR / "geoglows_daily.csv.gz"
 DAILY_META_FILE = DATA_DIR / "geoglows_daily.json"
 WIDTH_FILE = DATA_DIR / "nakatiya_open_water_width.csv"
+RAIN_HINDCAST_FILE = DATA_DIR / "nakatiya_rain_forecast_hindcast.csv"
+RAIN_SCORES_FILE = DATA_DIR / "nakatiya_rain_forecast_scores.csv"
 
 # GEOGLOWS river segments (TDX-Hydro LINKNO), upstream to downstream. A flow is the flow leaving the segment, so
 # `area_km2` is the model's contributing area at the segment's downstream end (v2 model table, DSContArea). `km` is
@@ -120,6 +122,23 @@ def fetch_forecast(river_id, timeout=60):
 @lru_cache(maxsize=1)
 def _widths():
     return pd.read_csv(WIDTH_FILE, parse_dates=["date"])
+
+
+@lru_cache(maxsize=1)
+def _rain_hindcast():
+    return pd.read_csv(RAIN_HINDCAST_FILE, parse_dates=["target_date", "origin_date"])
+
+
+def load_rain_hindcast():
+    """How a rain-forecast model would have done at the Nakatiya mouth, 2024-03 onward: for each forecast origin
+    and horizon (1, 3, 7 days), the GEOGLOWS flow on the target day, the model's median and 10-90 % band when given
+    the archived ECMWF rain forecast, and the same model family without any rain forecast (research/flow_forecast)."""
+    return _rain_hindcast().copy()
+
+
+def load_rain_scores():
+    """Skill scores behind `load_rain_hindcast`, one row per horizon and model."""
+    return pd.read_csv(RAIN_SCORES_FILE)
 
 
 def load_widths():
