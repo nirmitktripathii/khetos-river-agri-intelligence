@@ -179,6 +179,7 @@ For NDMI, the app calls a value below 0 "low", 0–0.2 "moderate" and above 0.2 
 
 - district outlines;
 - the Nakatiya (blue);
+- the Nakatiya's watershed (purple outline, 444 km²) and the part above Khajuria ghat (dashed teal, 235 km²);
 - the Qila candidate (dashed purple, unverified);
 - yellow circles for the three reaches;
 - a purple box for your current AOI.
@@ -737,7 +738,7 @@ This page uses the same machinery as tab A, arranged to answer two further quest
 
 ### Tab A: Modelled flow
 
-1. Pick a point on the river. There are four model stream segments: above the city (km 10–21 of the mapped river), entering the city (km 22–26), below the city (km 45–52) and at the Ramganga (the whole river, 371.5 km²).
+1. Pick a point on the river. There are five model stream segments: above the city (km 10–21 of the mapped river), entering the city (km 22–26), **Khajuria ghat** (km 33–34, by Saidpur Khajuria), below the city (km 45–52) and at the Ramganga (the whole river, 371.5 km²). Khajuria's contributing area (about 188 km²) is estimated from the flows above and below it, because the model's own table could not be downloaded.
 2. **Four numbers** for 1991–2020, the current 30-year climate normal:
    - **Yearly water**: the mean volume in million cubic metres, and the same volume as a depth of water over the catchment (in the tooltip).
    - **Mean flow** in m³/s. The middle day is far lower than the mean, because a few flood days carry much of the water.
@@ -757,7 +758,19 @@ This page uses the same machinery as tab A, arranged to answer two further quest
 
 **Reading the trends honestly.** Since 1985 the *modelled* dry-season flow shows a clear rise. That goes with falling ERA5 evaporative demand, not with more rain. Because the model cannot see built-up land, sewage or pumping, it can neither confirm nor rule out the construction effect this project is studying.
 
-### Tab B: Satellite width
+### Tab B: Yearly record (the Nakatiya observatory)
+
+**Question:** Year by year, how much water passed Khajuria ghat in May, September and January, how much monsoon rain fell around Baheri, and how much of the watershed stays green through the dry season?
+
+**The boundary.** The observatory's boundary is the Nakatiya's **watershed**: all the land whose rain drains to the river. It was drawn from MERIT-Hydro, a 90 m elevation model corrected for rivers, with the Global Watersheds tool. To the Ramganga confluence it covers **444 km²**; above Khajuria ghat, **235 km²**. On these flat plains the line is good to a few hundred metres, and roads, canals and drains move water across it. Baheri itself lies about 10 km north of the top of the watershed. *Analogy:* the watershed is the roof, and the river is the gutter that every part of the roof drains into.
+
+1. **Map**: the watershed (purple), the part above Khajuria ghat (dashed teal), the river, the flow point at Khajuria ghat and Baheri.
+2. **Flow at Khajuria ghat**: for May, September and January, the latest complete month's mean flow, compared with the 1991–2020 mean for that month, and one bar per year from 1942. The 1991–2020 means are about **0.22 m³/s in May** (0.6 million m³ in the month), **7.3 m³/s in September** (19 million m³) and **0.73 m³/s in January** (2 million m³). These are GEOGLOWS model flows, with every limit in the banner.
+3. **Monsoon rain at Baheri**: June–October rain, month by month, as stacked bars from **1901**, from the India Meteorological Department's gridded rainfall (0.25°, built from rain gauges). It is the mean of the 3 × 3 grid cells around Baheri (about 80 × 80 km): a single cell jumps when nearby gauges come and go over the decades, a block of cells much less. Its 1991–2020 mean is about 1,040 mm; the driest monsoon on record is 1987 (about 540 mm) and the wettest 1936 (about 2,050 mm). The orange line is ERA5 for the Baheri cell from 1940, a weather model's estimate that runs higher than IMD here (1991–2020 mean about 1,210 mm). IMD's grid for a year appears a few months after it ends, so the current year is shown only by ERA5.
+4. **Permanent vegetation in May**: the share of the watershed whose Landsat greenness (NDVI) stands at least 0.10 above the watershed's median both in May and in the November before. In May the wheat is cut; in November the rice is cut and the wheat not yet up. What is green in both is trees, groves, orchards and sugarcane (a 10–12 month crop), not the summer crops. The test is relative because a fixed NDVI threshold jumped with the 2013 switch to Landsat 8 and with haze. Read the trend over many years, not one year against the next. Purple diamonds show ESA WorldCover tree cover for 2020 and 2021; about half of the flagged pixels are WorldCover trees, and the rest are mostly sugarcane and pixels that mix trees with fields.
+5. **Downloads**: the yearly workbook (Excel, with a Notes sheet explaining every column), the same table as CSV, and the watershed as GeoJSON.
+
+### Tab C: Satellite width
 
 **Question:** What does the satellite say about the channel itself?
 
@@ -765,7 +778,7 @@ This page uses the same machinery as tab A, arranged to answer two further quest
 - Dates whose water signature was borrowed from another date, or contaminated, are marked unreliable. The toggle hides them by default.
 - **Width is not flow.** It says when the channel is wide or narrow; depth and speed are unknown. Noise is about ±0.5 m, so read the pattern between seasons, not one date.
 
-### Tab C: Field readings
+### Tab D: Field readings
 
 **Question:** What is the river really carrying today?
 
@@ -780,7 +793,7 @@ The cross-section uses the trapezoid rule: the depths joined to zero depth at bo
 
 *Worked example:* width 6 m, depths 0.3, 0.5, 0.6 and 0.4 m, float distance 10 m, times 14, 15 and 13 s. Area 2.16 m², surface speed 0.714 m/s, flow 1.31 m³/s (1.23 to 1.39 for the coefficient range).
 
-### Tab D: Check and limits
+### Tab E: Check and limits
 
 - **Check against the gauged neighbour.** The Ramganga at Chaubari (Bareilly) has a Central Water Commission gauge, and WWF-India and INRM (the Institute of Natural Resources Management) built a SWAT (Soil and Water Assessment Tool) model calibrated to it. The table compares GEOGLOWS with that model for 1973–2011. GEOGLOWS runs about twice the gauge-calibrated river in the monsoon and up to three times in the pre-monsoon, and the gap differs by season and by dependability: **never scale the Nakatiya's flows by one factor**.
 - **What the page cannot tell you**: no gauge data; no city, sewage, canals or aquifer in the model (so no construction effect); the model stream starts about 25–30 km below the mapped head; the flows are not bias-corrected; and a machine-learning forecast trained on them would copy the model, not the river.
@@ -799,5 +812,7 @@ The cross-section uses the trapezoid rule: the depths joined to zero depth at bo
 | Is it flooding right now? | Sentinel-1 VV below −18 dB |
 | What changed in the last 90 days? | Sentinel-2 construction alerts |
 | How much water does the river carry, and how has that changed? | GEOGLOWS modelled flow, 1940 onward (module 10), checked against your own float readings |
+| How wet was each monsoon around Baheri? | IMD gridded rainfall from 1901 and ERA5 from 1940 (module 10, Yearly record) |
+| How much of the watershed stays green through the dry season? | Landsat May and November medians, usable from 1994, checked against ESA WorldCover (module 10, Yearly record) |
 
 Every number traces back to a measurable rule plus a caveat, and every river output is a signal to verify, never a legal finding. See [AUDIT.md](AUDIT.md) for the calibration evidence behind the thresholds and [DATA_PROVENANCE.md](DATA_PROVENANCE.md) for licences.

@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 
 NAKATIYA_FILE = DATA_DIR / "nakatia_osm.geojson"
 QILA_FILE = DATA_DIR / "qila_candidate_osm.geojson"
+WATERSHED_FILE = DATA_DIR / "nakatiya_watershed.geojson"  # research/nakatiya_observatory/watershed.py
 MAIN_STEM_WAYS = {355365315, 487806973, 562114087}  # head east of Bhojipura -> Ramganga confluence
 USER_AGENT = {"User-Agent": "KhetOS-PoC/1.0 (river corridor research)"}
 OVERPASS_QUERY = """[out:json][timeout:60];
@@ -75,6 +76,12 @@ def load_nakatiya():
 def load_qila_candidate():
     """Unnamed OSM river ways that match the Qila's described course (unverified identification)."""
     return _load(QILA_FILE)
+
+
+def load_watershed():
+    """The Nakatiya's watershed (MERIT-Hydro 90 m): the land that drains to the Ramganga confluence ("whole_river")
+    and to Khajuria ghat ("khajuria"). Each feature carries its outlet and area_km2."""
+    return _load(WATERSHED_FILE)
 
 
 def fetch_nakatiya_osm(timeout=90):

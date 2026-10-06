@@ -51,6 +51,11 @@ ATTRIBUTIONS = {
     "Weather": "Weather data by Open-Meteo.com, CC BY 4.0",
     "Modelled river flow": "GEOGLOWS v2 retrospective and forecast flows (ECMWF ERA5 runoff routed on TDX-Hydro, "
                            "geoglows.ecmwf.int), CC BY 4.0",
+    "Gridded rainfall": "India Meteorological Department 0.25° gridded daily rainfall (Pai et al. 2014, "
+                        "imdpune.gov.in), and ECMWF ERA5 via Open-Meteo, CC BY 4.0",
+    "Watershed": "MERIT-Hydro (Yamazaki et al. 2019), delineated with the Global Watersheds API (mghydro.com), "
+                 "CC BY-NC 4.0 / ODbL",
+    "ESA WorldCover": "ESA WorldCover 10 m 2020 and 2021 (Zanaga et al.), CC BY 4.0",
 }
 DISCLAIMER = ("Remote-sensing outputs are change signals for follow-up. They are not legal, cadastral, "
               "encroachment or agronomic determinations; verify with field and revenue-record evidence before acting.")

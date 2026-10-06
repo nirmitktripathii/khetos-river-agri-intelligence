@@ -521,6 +521,7 @@ def render_course(course, key):
     st.warning(f"**Upstream of the mapped head.** {course['upstream_status']} Reported source: "
                f"{course['reported_source']}.", icon="❓")
     m = base_map(shape(RIVER_GEOM).bounds)
+    add_watershed(m)
     add_river(m)
     if course.get("head"):
         add_marker(m, course["head"][1], course["head"][0], "Mapped head (OpenStreetMap)", color="green", icon="play")
@@ -1295,8 +1296,8 @@ FLOW_BANNER = ("**Modelled, not measured.** These flows come from a global weath
                "Nakatiya. Use them for timing and seasons, not as the river's true discharge.")
 WORKBOOK = flow.DATA_DIR / "nakatiya_flow_history.xlsx"
 WIDTH_REACHES = {"upper": "Upper (30.1 km)", "urban": "Urban (14.5 km)", "lower": "Lower (14.6 km)"}
-FLOW_COLORS = {"above": "#2E7D32", "entering": "#9E9D24", "below": "#EF6C00", "mouth": "#0277BD",
-               "ramganga": "#6D4C41"}
+FLOW_COLORS = {"above": "#2E7D32", "entering": "#9E9D24", "khajuria": "#00897B", "below": "#EF6C00",
+               "mouth": "#0277BD", "ramganga": "#6D4C41"}
 
 
 @st.cache_data(show_spinner=False)
@@ -1393,7 +1394,8 @@ def flow_headline(tab, segment):
                       help="Matched or beaten in 9 years out of 10.")
     rows[1][1].metric("Share in June-September", fmt(tab["monsoon_share"], ".0f", "%"),
                       help="Share of the year's water that comes in the monsoon months.")
-    st.caption(f"{segment['name']}: GEOGLOWS segment {segment['id']}, contributing area {segment['area_km2']:.1f} km².")
+    st.caption(f"{segment['name']}: GEOGLOWS segment {segment['id']}, contributing area {segment['area_km2']:.1f} km²"
+               + (" (estimated from the flows above and below it)." if segment.get("area_estimated") else "."))
 
 
 def tab_modelled_flow():
@@ -1460,15 +1462,15 @@ RAIN_MODEL_NAMES = {"honest (no future rain)": "Without a rain forecast",
 
 
 def rain_hindcast_chart(d):
-    long = d.melt(id_vars=["target_date", "forecast_low_m3s", "forecast_high_m3s"],
+    long = d.melt(id_vars=["target_date"],
                   value_vars=["geoglows_m3s", "forecast_m3s", "no_rain_forecast_m3s"], var_name="series",
                   value_name="flow")
     long["series"] = long["series"].map({"geoglows_m3s": "GEOGLOWS model",
                                          "forecast_m3s": "With rain forecast",
                                          "no_rain_forecast_m3s": "Without rain forecast"})
     band = (alt.Chart(d).mark_area(opacity=0.2, color=FLOW_COLORS["mouth"])
-            .encode(x=alt.X("target_date:T", title=None), y=alt.Y("forecast_low_m3s:Q", title="Flow (m³/s)"),
-                    y2="forecast_high_m3s:Q"))
+            .encode(x=alt.X("target_date:T", title=None), y=alt.Y("forecast_low_cal_m3s:Q", title="Flow (m³/s)"),
+                    y2="forecast_high_cal_m3s:Q"))
     lines = (alt.Chart(long).mark_line(strokeWidth=1.4)
              .encode(x="target_date:T", y="flow:Q",
                      color=alt.Color("series:N", title=None, legend=alt.Legend(orient="bottom"),
@@ -1499,7 +1501,7 @@ def rain_forecast_section(key):
                     persist_state="session") or years[-1]
     st.altair_chart(rain_hindcast_chart(d[d["target_date"].dt.year == year]), width="stretch")
     st.caption("Each point is the forecast made that many days earlier for that day. Shaded: the model's 10-90 % "
-               "band with the rain forecast.")
+               "band with the rain forecast, widened by conformal calibration (below).")
     s = scores[scores["horizon_days"] == horizon].assign(model=lambda t: t["model"].map(RAIN_MODEL_NAMES))
     s = s[["model", "NSE", "NSE_monsoon", "PBIAS_%", "coverage_10_90"]].rename(columns={
         "model": "Model", "NSE": "Score, all days", "NSE_monsoon": "Score, June-September",
@@ -1510,10 +1512,15 @@ def rain_forecast_section(key):
         "Score, June-September": st.column_config.NumberColumn(format="%.2f"),
         "Water bias (%)": st.column_config.NumberColumn(format="%+.0f", help="Negative: too little water."),
         "Days inside the 10-90 % band": st.column_config.NumberColumn(format="percent", help="Should be near 80 %.")})
+    c = flow.load_rain_calibration().set_index("horizon_days").loc[horizon]
+    st.markdown(f"**Is the band honest?** Straight from the model, only {c['coverage_before']:.0%} of test days "
+                f"fall inside the 10-90 % band (it should be 80 %), because the model learned from exact rain. "
+                f"Conformal calibration widens it by an amount chosen on 2024 alone, separately for June-September "
+                f"and the rest of the year. On 2025-2026, days it never saw: **{c['coverage_after']:.0%}** inside "
+                f"({c['coverage_after_monsoon']:.0%} in the monsoon, {c['coverage_after_dry']:.0%} outside it).")
     st.warning("Judged against GEOGLOWS, not the river: this shows a rain forecast sharpens a 1-3 day forecast, not "
-               "how well the real Nakatiya can be predicted. The band is too narrow (fewer than 80 % of days fall "
-               "inside it). Only about two and a half monsoons are in the test. It is not run live, because the "
-               "flow and weather it starts from arrive about a week late.", icon="🧪")
+               "how well the real Nakatiya can be predicted. Only about two and a half monsoons are in the test. It "
+               "is not run live, because the flow and weather it starts from arrive about a week late.", icon="🧪")
     download_csv(d, f"river_rain_forecast_test_{horizon}d", "Test forecasts (CSV)")
 
 
@@ -1613,6 +1620,190 @@ def tab_field_readings():
                 "raw readings.")
 
 
+YEARLY_FLOW_MONTHS = {"may": "May", "sep": "September", "jan": "January"}
+YEARLY_RAIN_MONTHS = {"jun": "June", "jul": "July", "aug": "August", "sep": "September", "oct": "October"}
+WATERSHED_NAMES = {"whole_river": "Nakatiya watershed", "khajuria": "Watershed above Khajuria ghat"}
+BAHERI = (79.498, 28.774)  # lon, lat
+VEGETATION_NOTE = ("Share of the watershed whose greenness stands out (Landsat NDVI at least 0.10 above the "
+                   "watershed's median) both in May and in the November before: trees, groves, orchards and "
+                   "sugarcane, without the summer crops. The switch to Landsat 8 in 2013 and haze still move it by "
+                   "a few points, so read the trend over many years, not one year against the next. Purple "
+                   "diamonds: ESA WorldCover tree cover (its 2020 and 2021 maps use different algorithms). About "
+                   "half of the flagged pixels are WorldCover trees; the rest is mostly sugarcane and pixels that "
+                   "mix trees with fields. The record starts in 1994: the archive holds no usable May and November "
+                   "pair over the watershed before that, nor in 1997, 2002 and 2003.")
+
+
+@st.cache_data(show_spinner=False)
+def yearly_table():
+    return flow.load_yearly()
+
+
+def add_watershed(m, show=True):
+    for f in rv.load_watershed()["features"]:
+        p = f["properties"]
+        whole = p["name"] == "whole_river"
+        add_geojson(m, {"type": "FeatureCollection", "features": [f]},
+                    f"{WATERSHED_NAMES.get(p['name'], p['name'])} ({p['area_km2']:.0f} km²)",
+                    color="#6A1B9A" if whole else "#00897B", weight=3 if whole else 2, fill_opacity=0.03,
+                    dash=None if whole else "6 4", show=show)
+
+
+def watershed_map(key):
+    minx, miny, maxx, maxy = fc_bounds(rv.load_watershed())
+    m = base_map((minx, miny, maxx, max(maxy, BAHERI[1] + 0.01)))
+    add_watershed(m)
+    add_river(m)
+    lon, lat = flow.SEGMENTS["khajuria"]["outlet"]
+    add_marker(m, lat, lon, "Khajuria ghat (Saidpur Khajuria): flow point", color="green", icon="tint")
+    add_marker(m, BAHERI[1], BAHERI[0], "Baheri: rain", color="blue", icon="cloud")
+    show_map(m, key, 460)
+
+
+def normal_of(series):
+    return series.loc[flow.BASELINE[0]:flow.BASELINE[1]].mean()
+
+
+def yearly_flow_chart(t, month):
+    d = t[[f"{month}_mean_m3s", f"{month}_volume_mcm"]].dropna().reset_index()
+    d.columns = ["year", "mean", "volume"]
+    normal = normal_of(t[f"{month}_mean_m3s"])
+    bars = (alt.Chart(d).mark_bar(color=FLOW_COLORS["khajuria"])
+            .encode(x=alt.X("year:O", title=None, axis=alt.Axis(labelOverlap=True, values=list(d["year"][::10]))),
+                    y=alt.Y("mean:Q", title=f"Mean flow in {YEARLY_FLOW_MONTHS[month]} (m³/s)"),
+                    tooltip=[alt.Tooltip("year:O", title="Year"),
+                             alt.Tooltip("mean:Q", title="Mean flow (m³/s)", format=".2f"),
+                             alt.Tooltip("volume:Q", title="Water in the month (million m³)", format=".2f")]))
+    rule = (alt.Chart(pd.DataFrame({"normal": [normal]})).mark_rule(color="#444444", strokeDash=[6, 4])
+            .encode(y="normal:Q", tooltip=[alt.Tooltip("normal:Q", title="1991-2020 mean (m³/s)", format=".2f")]))
+    return (bars + rule).properties(height=260)
+
+
+def yearly_rain_chart(t):
+    cols = [f"imd_{m}_mm" for m in YEARLY_RAIN_MONTHS]
+    d = t[cols].dropna(how="all").reset_index().melt(id_vars="year", var_name="month", value_name="mm")
+    d["month"] = d["month"].str[4:7].map(YEARLY_RAIN_MONTHS)
+    names = list(YEARLY_RAIN_MONTHS.values())
+    bars = (alt.Chart(d).mark_bar()
+            .encode(x=alt.X("year:O", title=None, axis=alt.Axis(labelOverlap=True, values=list(range(1901, 2031, 10)))),
+                    y=alt.Y("mm:Q", title="Rain, June-October (mm)", stack="zero"),
+                    color=alt.Color("month:N", title=None, sort=names, legend=alt.Legend(orient="bottom"),
+                                    scale=alt.Scale(domain=names,
+                                                    range=["#90CAF9", "#42A5F5", "#1E88E5", "#1565C0", "#0D47A1"])),
+                    order=alt.Order("month_order:Q"),
+                    tooltip=[alt.Tooltip("year:O", title="Year"), alt.Tooltip("month:N", title="Month"),
+                             alt.Tooltip("mm:Q", title="IMD rain (mm)", format=".0f")])
+            .transform_calculate(month_order=f"indexof({names}, datum.month)"))
+    era5 = t["era5_jun_oct_mm"].dropna().reset_index()
+    line = (alt.Chart(era5).mark_line(color="#E65100", strokeWidth=1.3, point=alt.OverlayMarkDef(size=12))
+            .encode(x="year:O", y="era5_jun_oct_mm:Q",
+                    tooltip=[alt.Tooltip("year:O", title="Year"),
+                             alt.Tooltip("era5_jun_oct_mm:Q", title="ERA5 June-October (mm)", format=".0f")]))
+    return (bars + line).properties(height=300)
+
+
+def yearly_vegetation_chart(t):
+    d = t[["veg_permanent_pct", "veg_permanent_km2", "veg_may_looks", "veg_platforms",
+           "veg_worldcover_trees_pct"]].dropna(subset=["veg_permanent_pct"])
+    d = d.reset_index()
+    d["sensor"] = np.where(d["veg_platforms"].str.contains("landsat-8|landsat-9"), "Landsat 8/9 (from 2013)",
+                           "Landsat 5/7 (to 2012)")
+    pts = (alt.Chart(d).mark_line(point=True, color="#2E7D32")
+           .encode(x=alt.X("year:Q", title=None, axis=alt.Axis(format="d"), scale=alt.Scale(zero=False)),
+                   y=alt.Y("veg_permanent_pct:Q", title="Permanent vegetation, % of watershed"),
+                   tooltip=[alt.Tooltip("year:Q", title="Year", format="d"),
+                            alt.Tooltip("veg_permanent_pct:Q", title="% of watershed", format=".1f"),
+                            alt.Tooltip("veg_permanent_km2:Q", title="km²", format=".0f"),
+                            alt.Tooltip("veg_may_looks:Q", title="Clear looks in May"),
+                            alt.Tooltip("sensor:N", title="Sensor")]))
+    dots = pts.mark_point(filled=True, size=55).encode(
+        shape=alt.Shape("sensor:N", title=None, legend=alt.Legend(orient="bottom")))
+    layers = [pts, dots]
+    wc = d.dropna(subset=["veg_worldcover_trees_pct"])
+    if len(wc):
+        layers.append(alt.Chart(wc).mark_point(shape="diamond", size=110, color="#6A1B9A", filled=True)
+                      .encode(x="year:Q", y="veg_worldcover_trees_pct:Q",
+                              tooltip=[alt.Tooltip("year:Q", title="Year", format="d"),
+                                       alt.Tooltip("veg_worldcover_trees_pct:Q", title="ESA WorldCover trees (%)",
+                                                   format=".1f")]))
+    return alt.layer(*layers).properties(height=280)
+
+
+def latest_vs_normal(series):
+    s = series.dropna()
+    if s.empty:
+        return None, None, None
+    normal = normal_of(series)
+    return int(s.index[-1]), s.iloc[-1], 100 * (s.iloc[-1] / normal - 1) if normal else None
+
+
+def tab_yearly():
+    t = yearly_table()
+    st.markdown("**The Nakatiya observatory.** The boundary is the river's watershed: the land whose rain drains "
+                "to the Nakatiya. Each year: the flow at Khajuria ghat just before the city in May, September and "
+                "January; the monsoon rain at Baheri; and the land that stays green through the dry season.")
+    watershed_map("fw_watershed_map")
+    ws = {f["properties"]["name"]: f["properties"] for f in rv.load_watershed()["features"]}
+    st.caption(f"Watershed: {ws['whole_river']['area_km2']:.0f} km² to the Ramganga, "
+               f"{ws['khajuria']['area_km2']:.0f} km² above Khajuria ghat (MERIT-Hydro 90 m, Global Watersheds "
+               "API). On these flat plains the line is good to a few hundred metres, and roads, canals and drains "
+               "move water across it. Baheri lies about 10 km north of the top of the watershed.")
+
+    st.subheader("Flow at Khajuria ghat")
+    month = st.segmented_control("Month", list(YEARLY_FLOW_MONTHS), default="may", required=True,
+                                 format_func=YEARLY_FLOW_MONTHS.get, key="fw_yearly_month", persist_state="session")
+    flows = t.loc[t.index > flow.WARMUP_YEARS[-1]]
+    cols = st.columns(3)
+    for col, (m, name) in zip(cols, YEARLY_FLOW_MONTHS.items()):
+        year, value, pct = latest_vs_normal(flows[f"{m}_mean_m3s"])
+        col.metric(f"{name} {year}" if year else name, fmt(value, ".2f", " m³/s"),
+                   delta(pct, "+.0f", "% vs 1991-2020") if pct is not None else None, delta_color="off",
+                   help=f"Mean modelled flow over {name}; the change is against the 1991-2020 mean for {name}.")
+    st.altair_chart(yearly_flow_chart(flows, month), width="stretch")
+    st.caption("GEOGLOWS segment 441006241, river km 33-34. Modelled, not measured (see the banner above). Dashed "
+               f"line: the 1991-2020 mean. Complete months of {flows.index[0]}-{flows.index[-1]}; the model's first "
+               "two years are left out.")
+
+    st.subheader("Monsoon rain at Baheri")
+    year, value, pct = latest_vs_normal(t["imd_jun_oct_mm"])
+    e_year, e_value, e_pct = latest_vs_normal(t["era5_jun_oct_mm"])
+    c = st.columns(2)
+    c[0].metric(f"IMD, June-October {year}", fmt(value, ".0f", " mm"),
+                delta(pct, "+.0f", "% vs 1991-2020") if pct is not None else None, delta_color="off",
+                help="India Meteorological Department gauge-based grid, mean of the 3 × 3 cells around Baheri.")
+    c[1].metric(f"ERA5, June-October {e_year}", fmt(e_value, ".0f", " mm"),
+                delta(e_pct, "+.0f", "% vs 1991-2020") if e_pct is not None else None, delta_color="off",
+                help="ERA5 reanalysis, the 0.25° cell containing Baheri. Available to last week.")
+    st.altair_chart(yearly_rain_chart(t), width="stretch")
+    imd = t["imd_jun_oct_mm"].dropna()
+    st.caption(f"Bars: IMD gridded rainfall (0.25°, from gauges), {imd.index[0]}-{imd.index[-1]}, averaged over "
+               "the 3 × 3 grid cells around Baheri (about 80 × 80 km): one cell alone jumps as nearby gauges come "
+               "and go. Early decades rest on fewer gauges. Orange line: ERA5 for the Baheri cell from 1940, a "
+               "weather model's estimate that runs higher than IMD here.")
+
+    st.subheader("Permanent vegetation in May")
+    if "veg_permanent_pct" in t and t["veg_permanent_pct"].notna().any():
+        st.altair_chart(yearly_vegetation_chart(t), width="stretch")
+        st.caption(VEGETATION_NOTE)
+    else:
+        st.info("The vegetation record has not been built yet.", icon=":material/hourglass_empty:")
+
+    st.divider()
+    with st.container(horizontal=True):
+        if flow.YEARLY_BOOK.exists():
+            st.download_button("Yearly observatory workbook (Excel)", flow.YEARLY_BOOK.read_bytes(),
+                               file_name=flow.YEARLY_BOOK.name,
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                               key="fw_yearly_book", on_click="ignore", icon=":material/table_view:")
+        download_csv(t.reset_index(), "nakatiya_yearly", "Yearly table (CSV)")
+        download_geojson(rv.load_watershed(), "nakatiya_watershed", "Watershed (GeoJSON)")
+    show_method("**Flow**: GEOGLOWS v2 daily flow at Khajuria ghat, averaged over each complete month. **Rain**: "
+                "IMD 0.25° gridded daily rainfall (Pai et al. 2014) and ERA5 (Open-Meteo), summed over each "
+                "complete month. **Vegetation**: Landsat 30 m medians of the clear looks in May and in the "
+                "November before, within the watershed. **Watershed**: MERIT-Hydro flow directions, delineated "
+                "from the Ramganga confluence and from Khajuria ghat. Built by research/nakatiya_observatory.")
+
+
 def tab_flow_checks():
     st.markdown("**Check against the gauged neighbour.** The Ramganga at Chaubari (Bareilly) has a Central Water "
                 "Commission gauge. WWF-India and INRM built a hydrological model calibrated to it. Comparing "
@@ -1635,7 +1826,7 @@ def tab_flow_checks():
         "The model has no city, no sewage, no irrigation, no canals and no aquifer: it cannot show the effect of "
         "riparian construction on seepage and runoff, the question this project wants to answer.",
         "The Nakatiya's model stream starts about 25-30 km below the mapped head, and a 371 km² catchment is small "
-        "for a 0.1° weather grid.",
+        "for a 0.1° weather grid. A finer elevation model (MERIT-Hydro, 90 m) draws the watershed at 444 km².",
         "GEOGLOWS flows are not bias-corrected. The 30-year climate normal is 1991-2020; the first two model "
         "years are left out.",
         "Open-water width from Sentinel-2 is a hint about the channel, not a flow.",
@@ -1647,23 +1838,16 @@ def tab_flow_checks():
 
 def page_river_flow(ctx):
     st.header(PAGES["river-flow"], divider="blue")
-    st.caption("How much water the Nakatiya carries, through the year and over the decades: modelled flows, "
-               "what the satellites see of the channel, and a form for your own field readings.")
+    st.caption("How much water the Nakatiya carries, through the year and over the decades: modelled flows, a "
+               "yearly record of flow, rain and vegetation in the watershed, what the satellites see of the "
+               "channel, and a form for your own field readings.")
     st.warning(FLOW_BANNER, icon=":material/water_drop:")
-    tabs = st.tabs(["Modelled flow", "Satellite width", "Field readings", "Check and limits"], key="fw_tab",
-                   on_change="rerun")
-    if tabs[0].open:
-        with tabs[0]:
-            tab_modelled_flow()
-    if tabs[1].open:
-        with tabs[1]:
-            tab_widths()
-    if tabs[2].open:
-        with tabs[2]:
-            tab_field_readings()
-    if tabs[3].open:
-        with tabs[3]:
-            tab_flow_checks()
+    tabs = st.tabs(["Modelled flow", "Yearly record", "Satellite width", "Field readings", "Check and limits"],
+                   key="fw_tab", on_change="rerun")
+    for tab, render in zip(tabs, (tab_modelled_flow, tab_yearly, tab_widths, tab_field_readings, tab_flow_checks)):
+        if tab.open:
+            with tab:
+                render()
 
 
 PAGE_FUNCS = {"overview": page_overview, "change-radar": page_radar, "field-scanner": page_field,

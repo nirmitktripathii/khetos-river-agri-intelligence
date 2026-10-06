@@ -9,8 +9,10 @@
   "segments": {
     "440988347": "Nakatiya above the city",
     "441010366": "Nakatiya entering the city",
+    "441006241": "Nakatiya at Khajuria ghat",
     "441068162": "Nakatiya below the city",
     "441161738": "Nakatiya at the Ramganga (whole river)",
     "441266307": "Ramganga at Chaubari (Bareilly gauge site)"
-  }
+  },
+  "khajuria_added": "2026-10-06 (same model run, pulled separately)"
 }

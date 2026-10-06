@@ -19,6 +19,7 @@ Can we build an accurate ML / deep-learning / transformer model of the Nakatiya'
 | `forecast/data.py` | Loads the bundled GEOGLOWS flow (this point and the points upstream), ERA5 rain, evaporation and soil moisture (no network) |
 | `pull_rain_forecast.py` | Pulls archived ECMWF rain forecasts, leads 1–7 days, from 2024-03-01 (Open-Meteo Previous Runs API, CC BY 4.0) into `inputs/ecmwf_rain_forecast_daily.csv.gz` |
 | `run_rain_forecast.py` | Fair test of a real rain forecast on 2024-03 to 2026-09 (train with the rain that fell, test with the rain that was forecast) |
+| `run_calibrate.py` | Widens the 10–90 % band by conformal calibration on 2024 (one margin for June–September, one for the rest), tests it on 2025 onward, and writes `data/nakatiya_rain_forecast_calibration.csv` and the calibrated band into the hindcast the app shows. Run after `run_rain_forecast.py` |
 | `pull_soil.py` | Pulls ERA5 soil moisture (three layers, three cells, from 1940; Open-Meteo, CC BY 4.0) into `inputs/era5_soil_daily.csv.gz` |
 | `forecast/features.py` | Feature families (base, wetness, soil, upstream, and a labelled best-case "future rain") at forecast origin *t*; target is log(1 + flow) *h* days ahead. Tests prove the honest families see nothing after *t* |
 | `forecast/splits.py` | Whole-year blocked splits with a gap, and rolling-origin walk-forward splits |
@@ -75,7 +76,7 @@ Open-Meteo keeps the rain each ECMWF (European Centre for Medium-Range Weather F
 
 - **A real rain forecast is the first thing that helps**: it closes about half the gap at 1–3 days and removes most of the volume bias (−34 % to −2 % at 3 days).
 - **At 7 days it adds little**: the forecast's day-by-day match to the rain that fell drops from 0.78 at 1 day ahead to 0.42 at 7.
-- **The 10–90 % bands become too narrow** (62–72 % of days inside instead of 80 %), because the model was trained on exact rain and does not know the forecast can be wrong. Widening them needs training on forecast rain, which needs a longer forecast archive.
+- **The 10–90 % bands become too narrow** (64–74 % of test days inside instead of 80 %), because the model was trained on exact rain and does not know the forecast can be wrong. **Fixed by conformal calibration** (`run_calibrate.py`, Romano et al. 2019): one margin, in log-flow terms, chosen on March–December 2024 so that 80 % of those days fall inside, separately for June–September and the rest of the year. On 2025-01 onward, never used to choose anything, coverage becomes 81 % at 1 day, 86 % at 3 days and 83 % at 7 days; the bands get about 1.5–1.8 times wider (almost all of it in the monsoon). The app draws the calibrated band.
 - ECMWF forecasts 8–26 % more rain than ERA5 over these days; no correction is applied.
 - Only two and a half monsoons are in the test: treat differences of a few hundredths as noise, and rerun as the archive grows.
 

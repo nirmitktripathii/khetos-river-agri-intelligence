@@ -22,6 +22,9 @@ DAILY_META_FILE = DATA_DIR / "geoglows_daily.json"
 WIDTH_FILE = DATA_DIR / "nakatiya_open_water_width.csv"
 RAIN_HINDCAST_FILE = DATA_DIR / "nakatiya_rain_forecast_hindcast.csv"
 RAIN_SCORES_FILE = DATA_DIR / "nakatiya_rain_forecast_scores.csv"
+RAIN_CALIBRATION_FILE = DATA_DIR / "nakatiya_rain_forecast_calibration.csv"
+YEARLY_FILE = DATA_DIR / "nakatiya_yearly_observations.csv"  # research/nakatiya_observatory/build_table.py
+YEARLY_BOOK = DATA_DIR / "nakatiya_yearly_observations.xlsx"
 
 # GEOGLOWS river segments (TDX-Hydro LINKNO), upstream to downstream. A flow is the flow leaving the segment, so
 # `area_km2` is the model's contributing area at the segment's downstream end (v2 model table, DSContArea). `km` is
@@ -32,6 +35,11 @@ SEGMENTS = {
               "outlet": (79.4736, 28.4023)},
     "entering": {"id": 441010366, "name": "Nakatiya entering the city", "km": "22-26", "area_km2": 138.4,
                  "outlet": (79.4639, 28.3821)},
+    # Khajuria ghat (Saidpur Khajuria, 0.2 km from the river). The model table would not download, so its area is
+    # estimated: the area at which the flow per km² between "entering" and "below" gives this segment's mean flow.
+    # (MERIT-Hydro puts 235 km² above this point; it draws the whole catchment 20 % larger than TDX-Hydro does.)
+    "khajuria": {"id": 441006241, "name": "Nakatiya at Khajuria ghat", "km": "33-34", "area_km2": 188.0,
+                 "outlet": (79.4711, 28.3380), "area_estimated": True},
     "below": {"id": 441068162, "name": "Nakatiya below the city", "km": "45-52", "area_km2": 227.1,
               "outlet": (79.4363, 28.2444)},
     "mouth": {"id": 441161738, "name": "Nakatiya at the Ramganga (whole river)", "km": "72.6", "area_km2": 371.5,
@@ -39,7 +47,7 @@ SEGMENTS = {
     "ramganga": {"id": 441266307, "name": "Ramganga at Chaubari (Bareilly gauge site)", "km": None,
                  "area_km2": 19961.7, "outlet": (79.368, 28.298)},
 }
-NAKATIYA_KEYS = ("above", "entering", "below", "mouth")
+NAKATIYA_KEYS = ("above", "entering", "khajuria", "below", "mouth")
 
 # India Meteorological Department seasons, and the June-May water year used for Indian rivers.
 SEASONS = {"winter": (1, 2), "pre-monsoon": (3, 4, 5), "monsoon": (6, 7, 8, 9), "post-monsoon": (10, 11, 12)}
@@ -132,13 +140,27 @@ def _rain_hindcast():
 def load_rain_hindcast():
     """How a rain-forecast model would have done at the Nakatiya mouth, 2024-03 onward: for each forecast origin
     and horizon (1, 3, 7 days), the GEOGLOWS flow on the target day, the model's median and 10-90 % band when given
-    the archived ECMWF rain forecast, and the same model family without any rain forecast (research/flow_forecast)."""
+    the archived ECMWF rain forecast, the band after conformal calibration (`*_cal_m3s`), and the same model family
+    without any rain forecast (research/flow_forecast)."""
     return _rain_hindcast().copy()
 
 
 def load_rain_scores():
     """Skill scores behind `load_rain_hindcast`, one row per horizon and model."""
     return pd.read_csv(RAIN_SCORES_FILE)
+
+
+def load_rain_calibration():
+    """Per horizon: how often the flow fell inside the 10-90 % band on test days from 2025, before and after the
+    band was widened by conformal calibration on 2024 (separately for June-September and the rest of the year)."""
+    return pd.read_csv(RAIN_CALIBRATION_FILE)
+
+
+def load_yearly():
+    """One row per year (indexed by year) for the Nakatiya observatory: modelled flow at Khajuria ghat in January,
+    May and September; June-October rain at Baheri (IMD gauge grid from 1901, ERA5 from 1940); and permanent
+    vegetation in the watershed in May (Landsat, from 1985). Blank where a source does not reach."""
+    return pd.read_csv(YEARLY_FILE, index_col="year")
 
 
 def load_widths():
