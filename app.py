@@ -13,7 +13,9 @@ import functools
 import json
 import logging
 import math
+import sys
 from datetime import date
+from pathlib import Path
 
 import altair as alt
 import folium
@@ -25,17 +27,37 @@ from pyproj import Geod
 from shapely.geometry import shape
 from streamlit_folium import st_folium
 
-from src import ai, analytics, eo, flow
-from src import river as rv
-from src.boundaries import load_districts
-from src.config import (APP_TITLE, ATTRIBUTIONS, DEFAULT_AOI, DISCLAIMER, NAKATIYA_REACHES, NAV_ITEMS, NEWS_CONTEXT,
-                        REGION_BBOX)
-from src.farmvibes_adapter import configuration as farmvibes_configuration
-from src.farmvibes_adapter import explain_extension_points
-from src.maps import (BRBG, PATCH_COLORS, RDYLGN, add_bbox, add_categorized, add_geojson, add_index_overlay,
-                      add_layer_control, add_marker, add_scouting_cells, base_map)
-from src.reports import build_markdown_report
-from src.weather import get_weather_context
+
+def forget_stale_code():
+    """Streamlit Cloud pulls a new commit into the running server and reruns this script, but keeps the src modules
+    it imported and the data it cached before the pull, so new app code can meet old modules (a KeyError on the
+    hosted app, 2026-10-07). When a src or data file is newer than the loaded package, drop both and import afresh.
+    Nothing writes to src/ or data/ at run time, so a newer file means a deploy."""
+    pkg = sys.modules.get("src")
+    if pkg is None:
+        return
+    root = Path(__file__).resolve().parent
+    files = [*(root / "src").glob("*.py"), *(p for p in (root / "data").iterdir() if p.is_file())]
+    if max(p.stat().st_mtime_ns for p in files) > getattr(pkg, "LOADED_NS", 0):
+        for name in [n for n in sys.modules if n == "src" or n.startswith("src.")]:
+            del sys.modules[name]
+        st.cache_data.clear()
+        st.cache_resource.clear()
+
+
+forget_stale_code()
+
+from src import ai, analytics, eo, flow  # noqa: E402
+from src import river as rv  # noqa: E402
+from src.boundaries import load_districts  # noqa: E402
+from src.config import (APP_TITLE, ATTRIBUTIONS, DEFAULT_AOI, DISCLAIMER,  # noqa: E402
+                        NAKATIYA_REACHES, NAV_ITEMS, NEWS_CONTEXT, REGION_BBOX)
+from src.farmvibes_adapter import configuration as farmvibes_configuration  # noqa: E402
+from src.farmvibes_adapter import explain_extension_points  # noqa: E402
+from src.maps import (BRBG, PATCH_COLORS, RDYLGN, add_bbox, add_categorized, add_geojson,  # noqa: E402
+                      add_index_overlay, add_layer_control, add_marker, add_scouting_cells, base_map)
+from src.reports import build_markdown_report  # noqa: E402
+from src.weather import get_weather_context  # noqa: E402
 
 st.set_page_config(page_title=APP_TITLE, page_icon="🌾", layout="wide")
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -1760,8 +1782,8 @@ def tab_yearly():
                    delta(pct, "+.0f", "% vs 1991-2020") if pct is not None else None, delta_color="off",
                    help=f"Mean modelled flow over {name}; the change is against the 1991-2020 mean for {name}.")
     st.altair_chart(yearly_flow_chart(flows, month), width="stretch")
-    st.caption("GEOGLOWS segment 441105311, river km 27-29; the ghat is at km 29.4. Modelled, not measured (see the banner above). Dashed "
-               f"line: the 1991-2020 mean. Complete months of {flows.index[0]}-{flows.index[-1]}; the model's first "
+    st.caption("GEOGLOWS segment 441105311, river km 27-29; the ghat is at km 29.4. Modelled, not measured (see the "
+               f"banner above). Dashed line: the 1991-2020 mean. Complete months of {flows.index[0]}-{flows.index[-1]}; the model's first "
                "two years are left out.")
 
     st.subheader("Monsoon rain at Baheri")
