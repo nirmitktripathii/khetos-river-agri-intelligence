@@ -1,4 +1,4 @@
-"""One row per year: Khajuria flow in January, May and September; May permanent vegetation in the watershed;
+"""One row per year: Khajuriya ghat flow in January, May and September; May permanent vegetation in the watershed;
 Baheri rain in June-October. Run after pull_inputs.py, pull_imd.py and may_vegetation.py.
 
 Writes data/nakatiya_yearly_observations.csv and data/nakatiya_yearly_observations.xlsx (with a notes sheet).
@@ -20,16 +20,17 @@ SECONDS_PER_DAY = 86400
 
 NOTES = [
     ("What", "One row per calendar year. Blank = not available (before the source starts, or month not over yet)."),
-    ("Flow at Khajuriya", "GEOGLOWS v2 modelled daily flow, river segment 441006241: the Nakatiya at Saidpur "
-     "Khajuria (28.338 N, 79.471 E), river km 33-34 from the mapped head, just before the city. MODELLED, NOT "
+    ("Flow at Khajuriya", "GEOGLOWS v2 modelled daily flow, river segment 441105311: the Nakatiya at Khajuriya "
+     "ghat by the Pilibhit bypass (28.3621 N, 79.4754 E), river km 29.4 from the mapped head, just before the "
+     "city; the segment runs km 27-29 and its catchment is about 148 km2 (estimated). MODELLED, NOT "
      "MEASURED: ERA5 rain-runoff routed down the river network; it knows nothing of the city, canals, pumping, "
      "sewage or seepage, and runs 1.6-1.9 times above the real Ramganga at Chaubari. Use it for year-to-year "
      "climate swings, not as the river's real volume. 1940-41 are real ERA5 drought years."),
     ("Flow columns", "*_mean_m3s = mean flow over the month (cubic metres per second); *_volume_mcm = total water "
      "passing in the month (million cubic metres; 1 million m3 = 100 crore litres)."),
-    ("Is 'Khajuriya ghat' right?", "OpenStreetMap has Saidpur Khajuria 220 m from the channel on the city's "
-     "northern side; no place named Khajuriya ghat was found in maps. Please confirm the spot; any other point "
-     "on the river can be swapped in."),
+    ("Where is Khajuriya ghat?", "Located by the user near the Pilibhit bypass road (Suncity Vistar), 186 m from "
+     "the mapped channel at river km 29.4. Saidpur Khajuria, about 4.6 km downstream (km 34), is a different "
+     "place."),
     ("Permanent vegetation", "Landsat 5/7/8/9 (30 m) over the whole Nakatiya watershed (444 km2). A pixel is "
      "permanent vegetation if its greenness stands out (NDVI at least 0.10 above the watershed's median) both in "
      "May and in the November before (10 Nov-10 Dec). That removes mentha and summer vegetables but keeps "
@@ -53,7 +54,7 @@ NOTES = [
      "available to last week, but it can miss single storms and runs higher than IMD in the foothills. Baheri lies "
      "about 10 km north of the watershed's top edge (28.685 N)."),
     ("Watershed", "data/nakatiya_watershed.geojson: MERIT-Hydro 90 m delineation (Global Watersheds API). "
-     "Whole river 444 km2; to Khajuria 235 km2. On flat plains the line is good to a few hundred metres; roads, "
+     "Whole river 444 km2; to Khajuriya ghat 200 km2. On flat plains the line is good to a few hundred metres; roads, "
      "canals and drains move water across it."),
     ("Licences", "GEOGLOWS CC BY 4.0; ERA5 via Open-Meteo CC BY 4.0; Landsat public domain (USGS); ESA WorldCover "
      "CC BY 4.0; MERIT-Hydro CC BY-NC 4.0 / ODbL; IMD gridded rainfall free for research and education "

@@ -20,7 +20,7 @@ from pull_rain import SHARE
 from src import flow
 
 APP = "https://khetos-river-agri-intelligence.streamlit.app/"
-SHORT = {"above": "Above the city", "entering": "Entering the city", "khajuria": "Khajuria ghat",
+SHORT = {"above": "Above the city", "entering": "Entering the city", "khajuria": "Khajuriya ghat",
          "below": "Below the city", "mouth": "Whole river, at the Ramganga", "ramganga": "Ramganga at Chaubari"}
 REACH = {"upper": "Upper (Bhojipura side)", "urban": "Urban (Dohra Road to Bisalpur Road)",
          "lower": "Lower (towards the Ramganga)"}

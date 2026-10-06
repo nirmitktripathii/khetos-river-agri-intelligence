@@ -1622,7 +1622,7 @@ def tab_field_readings():
 
 YEARLY_FLOW_MONTHS = {"may": "May", "sep": "September", "jan": "January"}
 YEARLY_RAIN_MONTHS = {"jun": "June", "jul": "July", "aug": "August", "sep": "September", "oct": "October"}
-WATERSHED_NAMES = {"whole_river": "Nakatiya watershed", "khajuria": "Watershed above Khajuria ghat"}
+WATERSHED_NAMES = {"whole_river": "Nakatiya watershed", "khajuria": "Watershed above Khajuriya ghat"}
 BAHERI = (79.498, 28.774)  # lon, lat
 VEGETATION_NOTE = ("Share of the watershed whose greenness stands out (Landsat NDVI at least 0.10 above the "
                    "watershed's median) both in May and in the November before: trees, groves, orchards and "
@@ -1654,8 +1654,8 @@ def watershed_map(key):
     m = base_map((minx, miny, maxx, max(maxy, BAHERI[1] + 0.01)))
     add_watershed(m)
     add_river(m)
-    lon, lat = flow.SEGMENTS["khajuria"]["outlet"]
-    add_marker(m, lat, lon, "Khajuria ghat (Saidpur Khajuria): flow point", color="green", icon="tint")
+    lon, lat = flow.SEGMENTS["khajuria"]["ghat"]
+    add_marker(m, lat, lon, "Khajuriya ghat (Pilibhit bypass): flow point", color="green", icon="tint")
     add_marker(m, BAHERI[1], BAHERI[0], "Baheri: rain", color="blue", icon="cloud")
     show_map(m, key, 460)
 
@@ -1740,16 +1740,16 @@ def latest_vs_normal(series):
 def tab_yearly():
     t = yearly_table()
     st.markdown("**The Nakatiya observatory.** The boundary is the river's watershed: the land whose rain drains "
-                "to the Nakatiya. Each year: the flow at Khajuria ghat just before the city in May, September and "
+                "to the Nakatiya. Each year: the flow at Khajuriya ghat just before the city in May, September and "
                 "January; the monsoon rain at Baheri; and the land that stays green through the dry season.")
     watershed_map("fw_watershed_map")
     ws = {f["properties"]["name"]: f["properties"] for f in rv.load_watershed()["features"]}
     st.caption(f"Watershed: {ws['whole_river']['area_km2']:.0f} km² to the Ramganga, "
-               f"{ws['khajuria']['area_km2']:.0f} km² above Khajuria ghat (MERIT-Hydro 90 m, Global Watersheds "
+               f"{ws['khajuria']['area_km2']:.0f} km² above Khajuriya ghat (MERIT-Hydro 90 m, Global Watersheds "
                "API). On these flat plains the line is good to a few hundred metres, and roads, canals and drains "
                "move water across it. Baheri lies about 10 km north of the top of the watershed.")
 
-    st.subheader("Flow at Khajuria ghat")
+    st.subheader("Flow at Khajuriya ghat")
     month = st.segmented_control("Month", list(YEARLY_FLOW_MONTHS), default="may", required=True,
                                  format_func=YEARLY_FLOW_MONTHS.get, key="fw_yearly_month", persist_state="session")
     flows = t.loc[t.index > flow.WARMUP_YEARS[-1]]
@@ -1760,7 +1760,7 @@ def tab_yearly():
                    delta(pct, "+.0f", "% vs 1991-2020") if pct is not None else None, delta_color="off",
                    help=f"Mean modelled flow over {name}; the change is against the 1991-2020 mean for {name}.")
     st.altair_chart(yearly_flow_chart(flows, month), width="stretch")
-    st.caption("GEOGLOWS segment 441006241, river km 33-34. Modelled, not measured (see the banner above). Dashed "
+    st.caption("GEOGLOWS segment 441105311, river km 27-29; the ghat is at km 29.4. Modelled, not measured (see the banner above). Dashed "
                f"line: the 1991-2020 mean. Complete months of {flows.index[0]}-{flows.index[-1]}; the model's first "
                "two years are left out.")
 
@@ -1797,11 +1797,11 @@ def tab_yearly():
                                key="fw_yearly_book", on_click="ignore", icon=":material/table_view:")
         download_csv(t.reset_index(), "nakatiya_yearly", "Yearly table (CSV)")
         download_geojson(rv.load_watershed(), "nakatiya_watershed", "Watershed (GeoJSON)")
-    show_method("**Flow**: GEOGLOWS v2 daily flow at Khajuria ghat, averaged over each complete month. **Rain**: "
+    show_method("**Flow**: GEOGLOWS v2 daily flow at Khajuriya ghat, averaged over each complete month. **Rain**: "
                 "IMD 0.25° gridded daily rainfall (Pai et al. 2014) and ERA5 (Open-Meteo), summed over each "
                 "complete month. **Vegetation**: Landsat 30 m medians of the clear looks in May and in the "
                 "November before, within the watershed. **Watershed**: MERIT-Hydro flow directions, delineated "
-                "from the Ramganga confluence and from Khajuria ghat. Built by research/nakatiya_observatory.")
+                "from the Ramganga confluence and from Khajuriya ghat. Built by research/nakatiya_observatory.")
 
 
 def tab_flow_checks():

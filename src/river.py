@@ -80,7 +80,7 @@ def load_qila_candidate():
 
 def load_watershed():
     """The Nakatiya's watershed (MERIT-Hydro 90 m): the land that drains to the Ramganga confluence ("whole_river")
-    and to Khajuria ghat ("khajuria"). Each feature carries its outlet and area_km2."""
+    and to Khajuriya ghat ("khajuria"). Each feature carries its outlet and area_km2."""
     return _load(WATERSHED_FILE)
 
 

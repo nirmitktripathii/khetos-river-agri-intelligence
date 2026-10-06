@@ -179,7 +179,7 @@ For NDMI, the app calls a value below 0 "low", 0–0.2 "moderate" and above 0.2 
 
 - district outlines;
 - the Nakatiya (blue);
-- the Nakatiya's watershed (purple outline, 444 km²) and the part above Khajuria ghat (dashed teal, 235 km²);
+- the Nakatiya's watershed (purple outline, 444 km²) and the part above Khajuriya ghat (dashed teal, 200 km²);
 - the Qila candidate (dashed purple, unverified);
 - yellow circles for the three reaches;
 - a purple box for your current AOI.
@@ -738,7 +738,7 @@ This page uses the same machinery as tab A, arranged to answer two further quest
 
 ### Tab A: Modelled flow
 
-1. Pick a point on the river. There are five model stream segments: above the city (km 10–21 of the mapped river), entering the city (km 22–26), **Khajuria ghat** (km 33–34, by Saidpur Khajuria), below the city (km 45–52) and at the Ramganga (the whole river, 371.5 km²). Khajuria's contributing area (about 188 km²) is estimated from the flows above and below it, because the model's own table could not be downloaded.
+1. Pick a point on the river. There are five model stream segments: above the city (km 10–21 of the mapped river), entering the city (km 22–26), **Khajuriya ghat** (km 27–29; the ghat, by the Pilibhit bypass, is at km 29.4), below the city (km 45–52) and at the Ramganga (the whole river, 371.5 km²). The ghat segment's contributing area (about 148 km²) is estimated from the flows above and below it, because the model's own table could not be downloaded.
 2. **Four numbers** for 1991–2020, the current 30-year climate normal:
    - **Yearly water**: the mean volume in million cubic metres, and the same volume as a depth of water over the catchment (in the tooltip).
    - **Mean flow** in m³/s. The middle day is far lower than the mean, because a few flood days carry much of the water.
@@ -760,12 +760,12 @@ This page uses the same machinery as tab A, arranged to answer two further quest
 
 ### Tab B: Yearly record (the Nakatiya observatory)
 
-**Question:** Year by year, how much water passed Khajuria ghat in May, September and January, how much monsoon rain fell around Baheri, and how much of the watershed stays green through the dry season?
+**Question:** Year by year, how much water passed Khajuriya ghat in May, September and January, how much monsoon rain fell around Baheri, and how much of the watershed stays green through the dry season?
 
-**The boundary.** The observatory's boundary is the Nakatiya's **watershed**: all the land whose rain drains to the river. It was drawn from MERIT-Hydro, a 90 m elevation model corrected for rivers, with the Global Watersheds tool. To the Ramganga confluence it covers **444 km²**; above Khajuria ghat, **235 km²**. On these flat plains the line is good to a few hundred metres, and roads, canals and drains move water across it. Baheri itself lies about 10 km north of the top of the watershed. *Analogy:* the watershed is the roof, and the river is the gutter that every part of the roof drains into.
+**The boundary.** The observatory's boundary is the Nakatiya's **watershed**: all the land whose rain drains to the river. It was drawn from MERIT-Hydro, a 90 m elevation model corrected for rivers, with the Global Watersheds tool. To the Ramganga confluence it covers **444 km²**; above Khajuriya ghat, **200 km²**. On these flat plains the line is good to a few hundred metres, and roads, canals and drains move water across it. Baheri itself lies about 10 km north of the top of the watershed. *Analogy:* the watershed is the roof, and the river is the gutter that every part of the roof drains into.
 
-1. **Map**: the watershed (purple), the part above Khajuria ghat (dashed teal), the river, the flow point at Khajuria ghat and Baheri.
-2. **Flow at Khajuria ghat**: for May, September and January, the latest complete month's mean flow, compared with the 1991–2020 mean for that month, and one bar per year from 1942. The 1991–2020 means are about **0.22 m³/s in May** (0.6 million m³ in the month), **7.3 m³/s in September** (19 million m³) and **0.73 m³/s in January** (2 million m³). These are GEOGLOWS model flows, with every limit in the banner.
+1. **Map**: the watershed (purple), the part above Khajuriya ghat (dashed teal), the river, the flow point at Khajuriya ghat and Baheri.
+2. **Flow at Khajuriya ghat**: for May, September and January, the latest complete month's mean flow, compared with the 1991–2020 mean for that month, and one bar per year from 1942. The 1991–2020 means are about **0.18 m³/s in May** (0.5 million m³ in the month), **6.2 m³/s in September** (16 million m³) and **0.60 m³/s in January** (1.6 million m³). These are GEOGLOWS model flows, with every limit in the banner.
 3. **Monsoon rain at Baheri**: June–October rain, month by month, as stacked bars from **1901**, from the India Meteorological Department's gridded rainfall (0.25°, built from rain gauges). It is the mean of the 3 × 3 grid cells around Baheri (about 80 × 80 km): a single cell jumps when nearby gauges come and go over the decades, a block of cells much less. Its 1991–2020 mean is about 1,040 mm; the driest monsoon on record is 1987 (about 540 mm) and the wettest 1936 (about 2,050 mm). The orange line is ERA5 for the Baheri cell from 1940, a weather model's estimate that runs higher than IMD here (1991–2020 mean about 1,210 mm). IMD's grid for a year appears a few months after it ends, so the current year is shown only by ERA5.
 4. **Permanent vegetation in May**: the share of the watershed whose Landsat greenness (NDVI) stands at least 0.10 above the watershed's median both in May and in the November before. In May the wheat is cut; in November the rice is cut and the wheat not yet up. What is green in both is trees, groves, orchards and sugarcane (a 10–12 month crop), not the summer crops. The test is relative because a fixed NDVI threshold jumped with the 2013 switch to Landsat 8 and with haze. Read the trend over many years, not one year against the next. Purple diamonds show ESA WorldCover tree cover for 2020 and 2021; about half of the flagged pixels are WorldCover trees, and the rest are mostly sugarcane and pixels that mix trees with fields.
 5. **Downloads**: the yearly workbook (Excel, with a Notes sheet explaining every column), the same table as CSV, and the watershed as GeoJSON.

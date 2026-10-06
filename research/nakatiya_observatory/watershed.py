@@ -4,7 +4,7 @@ Every drop of rain that falls inside the line drains to the Nakatiya; rain outsi
 polygons are written to data/nakatiya_watershed.geojson:
 
     whole_river   drains to the main stem 1.5 km above the Ramganga confluence (km 71.4 of 72.9)
-    khajuria      drains to the river at Saidpur Khajuria (km 34), the reach just before the city
+    khajuria      drains to the river at Khajuriya ghat by the Pilibhit bypass (km 29.4), just before the city
 
 Delineated on MERIT-Hydro (90 m, Yamazaki et al. 2019) by the Global Watersheds API (Heberger,
 https://mghydro.com/watersheds/), free and open. The outlet for the whole river sits 1.5 km above the
@@ -34,7 +34,7 @@ OUT = ROOT / "data" / "nakatiya_watershed.geojson"
 API = "https://mghydro.com/app/watershed_api"
 OUTLETS = {  # name: (lon, lat, river km from the mapped head, description)
     "whole_river": (79.4873, 28.1469, 71.4, "Whole Nakatiya, 1.5 km above the Ramganga confluence"),
-    "khajuria": (79.4711, 28.3380, 34.0, "Nakatiya at Saidpur Khajuria, just before the city"),
+    "khajuria": (79.4736, 28.3627, 29.4, "Nakatiya at Khajuriya ghat (Pilibhit bypass), just before the city"),
 }
 GEOD = Geod(ellps="WGS84")
 

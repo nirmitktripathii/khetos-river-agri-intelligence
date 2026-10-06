@@ -29,7 +29,7 @@ def test_yearly_record_tab_renders():
     at.run()
     assert not at.exception
     subheaders = [h.value for h in at.subheader]
-    assert "Flow at Khajuria ghat" in subheaders and "Monsoon rain at Baheri" in subheaders
+    assert "Flow at Khajuriya ghat" in subheaders and "Monsoon rain at Baheri" in subheaders
     metrics = {m.label: m.value for m in at.metric}
     assert any(label.startswith("May ") and value.endswith("m³/s") for label, value in metrics.items())
     assert any(label.startswith("IMD, June-October") for label in metrics)

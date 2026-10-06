@@ -13,7 +13,7 @@ A Streamlit-first, free/open-source proof of concept for Bareilly and the wider 
 * 🤖 Ask the Map
 * 🌊 Nakatiya River Observatory
 * 🏘 Land Change / Riparian Change
-* 📈 River Water Watch (modelled flow since 1940, a yearly record of flow at Khajuria ghat, rain at Baheri since 1901 and dry-season vegetation inside the Nakatiya's watershed, satellite width, field readings)
+* 📈 River Water Watch (modelled flow since 1940, a yearly record of flow at Khajuriya ghat, rain at Baheri since 1901 and dry-season vegetation inside the Nakatiya's watershed, satellite width, field readings)
 * 📄 Evidence report export
 
 ## Live data sources

@@ -35,11 +35,13 @@ SEGMENTS = {
               "outlet": (79.4736, 28.4023)},
     "entering": {"id": 441010366, "name": "Nakatiya entering the city", "km": "22-26", "area_km2": 138.4,
                  "outlet": (79.4639, 28.3821)},
-    # Khajuria ghat (Saidpur Khajuria, 0.2 km from the river). The model table would not download, so its area is
-    # estimated: the area at which the flow per km² between "entering" and "below" gives this segment's mean flow.
-    # (MERIT-Hydro puts 235 km² above this point; it draws the whole catchment 20 % larger than TDX-Hydro does.)
-    "khajuria": {"id": 441006241, "name": "Nakatiya at Khajuria ghat", "km": "33-34", "area_km2": 188.0,
-                 "outlet": (79.4711, 28.3380), "area_estimated": True},
+    # Khajuriya ghat by the Pilibhit bypass (`ghat`, located by the user), 186 m from the mapped channel at km 29.4,
+    # near the lower end of its segment; `outlet` is the channel point beside it. The model table would not
+    # download, so the area is estimated: the area at which the 1991-2020 flow per km² between "entering" and
+    # "below" gives this segment's mean flow. (MERIT-Hydro puts 200 km² above the ghat; it draws the whole
+    # catchment 20 % larger than TDX-Hydro does.)
+    "khajuria": {"id": 441105311, "name": "Nakatiya at Khajuriya ghat", "km": "27-29", "area_km2": 148.0,
+                 "outlet": (79.4736, 28.3627), "ghat": (79.4754, 28.3621), "area_estimated": True},
     "below": {"id": 441068162, "name": "Nakatiya below the city", "km": "45-52", "area_km2": 227.1,
               "outlet": (79.4363, 28.2444)},
     "mouth": {"id": 441161738, "name": "Nakatiya at the Ramganga (whole river)", "km": "72.6", "area_km2": 371.5,
@@ -157,7 +159,7 @@ def load_rain_calibration():
 
 
 def load_yearly():
-    """One row per year (indexed by year) for the Nakatiya observatory: modelled flow at Khajuria ghat in January,
+    """One row per year (indexed by year) for the Nakatiya observatory: modelled flow at Khajuriya ghat in January,
     May and September; June-October rain at Baheri (IMD gauge grid from 1901, ERA5 from 1940); and permanent
     vegetation in the watershed in May (Landsat, from 1985). Blank where a source does not reach."""
     return pd.read_csv(YEARLY_FILE, index_col="year")
